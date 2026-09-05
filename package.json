@@ -1,0 +1,56 @@
+{
+  "name": "claude-usage-widget",
+  "version": "0.1.0",
+  "description": "Desktop widget for Claude Code usage limits — shows session/weekly windows, reset times, and how fresh the data actually is.",
+  "main": "out/main/index.js",
+  "license": "MIT",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
+    "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
+    "typecheck": "npm run typecheck:node && npm run typecheck:web",
+    "test": "vitest run --config vitest.config.mts",
+    "test:watch": "vitest --config vitest.config.mts",
+    "dist": "electron-vite build && electron-builder",
+    "dist:win": "electron-vite build && electron-builder --win",
+    "dist:mac": "electron-vite build && electron-builder --mac",
+    "dist:linux": "electron-vite build && electron-builder --linux",
+    "dist:dir": "electron-vite build && electron-builder --dir"
+  },
+  "dependencies": {
+    "react": "^19.2.6",
+    "react-dom": "^19.2.6",
+    "react-icons": "^5.6.0",
+    "zustand": "^5.0.13"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.0",
+    "@types/node": "^22.10.2",
+    "@types/react": "^19.2.15",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.2.0",
+    "electron": "^41.7.0",
+    "electron-builder": "^25.1.8",
+    "electron-vite": "^5.0.0",
+    "tailwindcss": "^4.3.0",
+    "typescript": "^6.0.3",
+    "vite": "^6.4.2",
+    "vitest": "4.0.0"
+  },
+  "author": "Sezer Demir",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Fanthall/claude-usage-widget.git"
+  },
+  "keywords": [
+    "claude",
+    "claude-code",
+    "usage",
+    "quota",
+    "electron",
+    "widget",
+    "tray"
+  ]
+}

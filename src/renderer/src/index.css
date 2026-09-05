@@ -1,0 +1,11 @@
+@import "tailwindcss";
+
+html,
+body,
+#root {
+  margin: 0;
+  height: 100%;
+  background: transparent;
+  font-family: ui-sans-serif, system-ui, "Segoe UI", sans-serif;
+  overflow: hidden;
+}

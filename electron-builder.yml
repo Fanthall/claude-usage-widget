@@ -1,0 +1,98 @@
+# electron-builder paketleme konfigurasyonu.
+#
+# Bu dosya yoksa `npm run dist:*` tamamen varsayilanlarla kosar: Linux'ta
+# istenmeyen `snap` hedefi de uretilir, macOS uygulamasi dock'ta gorunur ve
+# appId `com.electron.<paket-adi>`e duser. Asagidaki degerler PRD
+# `infrastructure.md > Dagitim` bolumunu karsilar.
+#
+# Cikti: `dist/` (git-ignored). Ikon/arka plan gibi paketleme kaynaklari
+# `build/` altina konur; su an ikon yok, Electron varsayilani kullanilir.
+
+appId: dev.fanthal.claude-usage-widget
+productName: Claude Usage Widget
+copyright: Sezer Demir
+
+directories:
+  output: dist
+  buildResources: build
+
+# Paket icerigi: electron-vite ciktisi. Kaynak, test ve konfig disarida kalir.
+files:
+  - out/**
+  - package.json
+
+asar: true
+
+# ── macOS ────────────────────────────────────────────────────────────────────
+mac:
+  category: public.app-category.developer-tools
+  target:
+    - target: dmg
+      # Universal yerine iki ayri arch: universal paket iki ikiliyi tek dosyada
+      # tasir ve boyutu ~iki katina cikarir. Makine basina dogru arch indirilir.
+      arch:
+        - arm64
+        - x64
+  extendInfo:
+    # REQ-9: arka plan araci — dock'ta ve uygulama geciricide gorunmez.
+    # index.ts'teki `app.dock.hide()` calisirken kisa bir an gorunmeyi onler;
+    # ikisi birlikte kullanilir, biri digerinin yerine gecmez.
+    LSUIElement: true
+  # ── IMZALAMA YOK (kisisel kullanim, PRD infrastructure.md) ────────────────
+  # `identity: null` imzalama adimini tamamen atlar. Ilk acilista Gatekeeper
+  # uyarisi cikar; bu BEKLENEN davranistir (PRD'de bilinen sinir).
+  #
+  # Ileride imzalamak/notarize etmek gerekirse:
+  #   1. Apple Developer uyeligi + "Developer ID Application" sertifikasi
+  #   2. `identity: <Developer ID Application: Ad (TEAMID)>` (null satirini sil)
+  #   3. `hardenedRuntime: true` + `entitlements: build/entitlements.mac.plist`
+  #      (en az `com.apple.security.cs.allow-jit`)
+  #   4. `notarize: { teamId: <TEAMID> }` ve ortamda `APPLE_ID` +
+  #      `APPLE_APP_SPECIFIC_PASSWORD`
+  # Kimlik bilgileri ORTAM DEGISKENINDEN gelir, bu dosyaya YAZILMAZ (hard §28).
+  identity: null
+
+dmg:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# ── Linux ────────────────────────────────────────────────────────────────────
+linux:
+  # Yalniz AppImage: varsayilan `snap`+`AppImage` ikilisi snapcraft araci ister
+  # ve PRD tek dagitim bicimi istiyor.
+  target:
+    - target: AppImage
+      arch:
+        - x64
+  category: Utility
+  synopsis: Claude Code kota gostergesi
+  description: >-
+    Claude Code kota kullanimini ekran widget'i ve sistem cubugu gostergesiyle
+    izler.
+  # Tepsi ikonu icin masaustunde AppIndicator destegi gerekir:
+  #   Debian/Ubuntu: libayatana-appindicator3-1 (eski adiyla libappindicator3-1)
+  #   Fedora:        libappindicator-gtk3
+  # AppImage bagimlilik kuramaz, bu yuzden burasi bir NOT'tur, kurulum degil.
+  # Eksikse app calismaya devam eder: `probeTrayPresence` durumu `unverified`
+  # dondurur, widget gizlenmez ve kullanici kilitlenmez (tray-adapter.ts).
+  #
+  # `.desktop` girdisine dokunulmuyor: `NoDisplay=true` app'i uygulama
+  # listesinden de kaldirir ve Linux'ta tek baslatma yolu orasidir.
+
+appImage:
+  artifactName: ${productName}-${version}-${arch}.${ext}
+
+# ── Windows ──────────────────────────────────────────────────────────────────
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+
+nsis:
+  # Kullanici basina kurulum: yonetici yetkisi istemez.
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: false
+  createStartMenuShortcut: true
+  artifactName: ${productName}-Setup-${version}.${ext}

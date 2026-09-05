@@ -1,0 +1,13 @@
+node_modules/
+out/
+dist/
+*.log
+
+# Calisma zamani verisi — asla commit edilmez (PRD security.md)
+data/
+usage-history.jsonl
+heartbeat/
+.vite/
+*.tsbuildinfo
+.DS_Store
+Thumbs.db
