@@ -171,7 +171,7 @@ Not overstating this table is deliberate.
 
 ```bash
 npm run dev         # run the widget in development mode
-npm test            # 613 tests
+npm test            # 529 tests
 npm run typecheck
 npm run build
 ```
