@@ -190,6 +190,8 @@ function kinds(states: CollectorState[]): string[] {
 }
 
 function snapshotOf(status: UsageStatus): UsageSnapshot {
+  // 'error' durumunda da deger kaybolmaz; son bilinen olcum tasinir.
+  if (status.kind === 'error' && status.lastSnapshot !== null) return status.lastSnapshot
   if (status.kind === 'ok' || status.kind === 'stale') return status.snapshot
   throw new Error(`beklenen 'ok'/'stale', gelen '${status.kind}'`)
 }
@@ -270,23 +272,40 @@ describe('createCollector — taze olcum', () => {
 })
 
 describe('createCollector — onbellekten okuma', () => {
-  it('cached deger gosterilir ama bayat isaretlenir ve basarisizlik sinifi gorunur', async () => {
-    // Bu, 2026-09-05'te olculen hatanin ta kendisi: 20 dk once alinmis veri
-    // "guncel" diye gosteriliyordu. Artik `at` sunucu ani oldugu icin bayatlar.
+  it('cached deger bayatladiysa SEBEBI gorunur — yalniz "eski" demek yetmez', async () => {
+    // 2026-09-06'da olculdu: jeton 06:02'de doldu, widget "13 sa once" dedi ama
+    // "oturum kapali" DEMEDI. Durum 'stale' oldugunda basarisizlik sinifi
+    // arayuze hic ulasmiyordu; kullanici ne yapacagini bilemedi.
+    // Bayat deger + gorunur sebep = 'error' + lastSnapshot.
     const harness = makeHarness({
       respond: async () => cached(START_MS - 20 * MINUTE, 22, 'rate-limited')
     })
 
     const state = await harness.collector.pollNow()
 
-    expect(state.status.kind).toBe('stale')
+    expect(state.status.kind).toBe('error')
+    // Deger kaybolmaz: bayat da olsa gosterilir.
     expect(firstPercent(snapshotOf(state.status))).toBe(22)
-    if (state.status.kind === 'stale') {
-      expect(state.status.ageMs).toBe(20 * MINUTE)
-      expect(state.status.reason).toContain('rate-limited')
+    if (state.status.kind === 'error') {
+      expect(state.status.errorKind).toBe('rate-limited')
+      expect(state.status.lastSnapshot).not.toBeNull()
     }
     expect(state.lastFailure).toBe('rate-limited')
     expect(state.errorStreak).toBe(1)
+  })
+
+  it('cached deger + sebep: jeton suresi dolmasi senaryosu', async () => {
+    const harness = makeHarness({
+      respond: async () => cached(START_MS - 6 * 60 * MINUTE, 67, 'not-logged-in')
+    })
+
+    const state = await harness.collector.pollNow()
+
+    expect(state.status.kind).toBe('error')
+    if (state.status.kind === 'error') {
+      // Arayuz bu siniftan "oturum kapali (claude auth login)" metnini uretir.
+      expect(state.status.errorKind).toBe('not-logged-in')
+    }
   })
 
   it('onbellek gercekten tazeyse ok kalir ama basarisizlik sinifi gizlenmez', async () => {

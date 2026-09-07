@@ -11,6 +11,7 @@
 import type { CliErrorKind } from '../../shared/types'
 import type { UsageReadResult } from './collector'
 import { claudeConfigFile, nodePathEnv, type PathEnv } from './paths'
+import { createCliRefresher, type RefreshOutcome } from './cli-refresh'
 import { claudeCredentialsFile, readAccessToken } from './identity'
 import {
   fetchUtilization,
@@ -44,6 +45,11 @@ export interface UsageReaderDeps {
   env?: PathEnv
   /** Testte enjekte edilir; uretimde `fetchUtilization`. */
   fetchFn?: FetchDeps['fetchFn']
+  /**
+   * Jeton suresi dolunca CLI'i durterek tazeletir. Testte enjekte edilir.
+   * Verilmezse gercek CLI aranir.
+   */
+  refreshToken?: () => Promise<RefreshOutcome>
   readToken?: FetchDeps['readToken']
   now?: () => number
 }
@@ -71,12 +77,25 @@ export function createUsageReader(deps: UsageReaderDeps): () => Promise<UsageRea
     deps.readToken ??
     (() => readAccessToken({ readFile: (f) => deps.fs.readFile(f) }, claudeCredentialsFile(env)))
 
-  return async function readUsage(): Promise<UsageReadResult> {
-    const fresh = await fetchUtilization({
+  const nudgeCli = deps.refreshToken ?? createCliRefresher()
+
+  const fetchOnce = (): Promise<Awaited<ReturnType<typeof fetchUtilization>>> =>
+    fetchUtilization({
       readToken,
       ...(deps.fetchFn === undefined ? {} : { fetchFn: deps.fetchFn }),
       ...(deps.now === undefined ? {} : { now: deps.now })
     })
+
+  return async function readUsage(): Promise<UsageReadResult> {
+    let fresh = await fetchOnce()
+
+    // Jeton 8 saatte bir doluyor ve onu yalnizca CLI yenileyebilir (refresh
+    // token tek kullanimlik olabilir; biz tuketirsek kullanicinin CLI oturumu
+    // duser). Bir kez durtup yeniden deniyoruz; jeton dosyadan taze okunur.
+    if (!fresh.ok && fresh.kind === 'unauthorized') {
+      const outcome = await nudgeCli()
+      if (outcome === 'refreshed') fresh = await fetchOnce()
+    }
 
     if (fresh.ok) {
       return { kind: 'fresh', snapshot: toSnapshot(fresh.fetchedAtMs, fresh.windows) }

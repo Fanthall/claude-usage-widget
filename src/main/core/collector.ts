@@ -286,9 +286,9 @@ export function createCollector(deps: CollectorDeps, config: CollectorInit): Col
     }
 
     lastSnapshot = snapshot
-    baseStatus = { kind: 'ok', snapshot }
 
     if (result.kind === 'fresh') {
+      baseStatus = { kind: 'ok', snapshot }
       errorStreak = 0
       lastFailure = null
       intervalMs = baseIntervalMs
@@ -297,6 +297,24 @@ export function createCollector(deps: CollectorDeps, config: CollectorInit): Col
       errorStreak += 1
       lastFailure = result.failure
       applyBackoff(result.failure)
+
+      // Onbellek hala tazeyse deger guvenilir; gecici bir tazeleme hatasi
+      // kullaniciyi kirmiziya bogmamali. Ama deger bayatladiysa SEBEBI
+      // gorunmeli: "13 sa once" tek basina ne yapmasi gerektigini soylemez.
+      // Bu, jeton suresi dolunca yasandi: widget bayat dedi, "oturum kapali"
+      // demedi ve kullanici sebebi bilemedi.
+      const age = now() - snapshot.at
+      baseStatus =
+        age > staleThresholdMs(baseIntervalMs)
+          ? {
+              kind: 'error',
+              errorKind: result.failure,
+              // Kullaniciya gorunen metin arayuzde errorKind-dan cevrilir;
+              // buradaki mesaj tani icindir.
+              message: `tazeleme basarisiz (${result.failure})`,
+              lastSnapshot: snapshot
+            }
+          : { kind: 'ok', snapshot }
     }
 
     await persistOnce(snapshot)

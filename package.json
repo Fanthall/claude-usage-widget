@@ -1,6 +1,6 @@
 {
   "name": "claude-usage-widget",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Desktop widget for Claude Code usage limits — shows session/weekly windows, reset times, and how fresh the data actually is.",
   "main": "out/main/index.js",
   "license": "MIT",
