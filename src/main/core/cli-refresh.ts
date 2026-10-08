@@ -7,9 +7,12 @@
  * oturumu duser. Bu yuzden jetonu BIZ uretmiyoruz — CLI'i bir kez calistirip
  * kendi kurallariyla tazelemesini sagliyoruz, sonra dosyayi yeniden okuyoruz.
  *
- * `claude -p "/usage"` secildi: sifir token harcar (model cagrisi yapmaz) ama
- * kimlik dogrulamasi gerektiren bir istek attigi icin CLI'i jetonu tazelemeye
- * zorlar.
+ * `claude -p "/usage"` secildi: sifir token harcar (slash komutu, model cagrisi
+ * yapmaz) ama kimlik dogrulamasi gereken bir istek attigi icin CLI'i jetonu
+ * tazelemeye zorlar. Olculdu: dolmus jeton 4,7 sn'de yenilenir.
+ *
+ * `claude auth status` BU ISE YARAMAZ — aga hic gitmez, yalnizca dosyadaki
+ * kaydi okuyup `loggedIn: true` basar; jeton dolmus olsa bile tazelemez.
  *
  * Bu **kurtarma** yoludur, veri yolu degildir: kota verisi hala dogrudan uctan
  * gelir. CLI bulunamazsa kurtarma calismaz ve durum "oturum kapali" olarak
@@ -64,9 +67,13 @@ export const nodeDiscoverFs: DiscoverFs = {
  * `claude` calistirilabilirini arar.
  *
  * Windows'ta PATH genelde `claude.cmd` / `claude.ps1` shim'i gosterir; Node 22'de
- * `execFile(shell:false)` ile `.cmd` calistirmak EINVAL verir. Bu yuzden once
- * gercek `.exe` aranir — kurulum surum klasorleri altindadir ve surum her
- * guncellemede degisir, en yenisi secilir.
+ * `execFile(shell:false)` ile `.cmd` calistirmak EINVAL verir. Bu yuzden hep
+ * gercek `.exe` aranir. Iki kurulum bicimi vardir:
+ *
+ *   npm global : %APPDATA%/npm/node_modules/@anthropic-ai/claude-code/bin/claude.exe
+ *   native     : %APPDATA%/Claude/claude-code/<surum>/<hash>/claude.exe
+ *
+ * Surum her guncellemede degisir, en yenisi secilir.
  */
 export function findClaudeBinary(
   platform: NodeJS.Platform = process.platform,
@@ -81,10 +88,31 @@ export function findClaudeBinary(
 
   if (platform === 'win32') {
     const roaming = env['APPDATA'] ?? join(home, 'AppData', 'Roaming')
+
+    // npm ile global kurulumda PATH `claude.cmd` shim'ini gosterir; paketin
+    // kendi `.exe`si ise execFile ile dogrudan calistirilabilir.
+    const npmExe = join(
+      roaming,
+      'npm',
+      'node_modules',
+      '@anthropic-ai',
+      'claude-code',
+      'bin',
+      'claude.exe'
+    )
+    if (fs.exists(npmExe)) return npmExe
+
     const base = join(roaming, 'Claude', 'claude-code')
     for (const version of sortVersionsDesc(fs.listDir(base))) {
-      const exe = join(base, version, 'claude.exe')
-      if (fs.exists(exe)) return exe
+      const versionDir = join(base, version)
+      const direct = join(versionDir, 'claude.exe')
+      if (fs.exists(direct)) return direct
+      // Surumun altinda bir hash klasoru bulunur; bu seviye atlanirsa kurulum
+      // hic bulunamaz (orn. 2.1.293/83cb0bd7fed4/claude.exe).
+      for (const hash of fs.listDir(versionDir)) {
+        const nested = join(versionDir, hash, 'claude.exe')
+        if (fs.exists(nested)) return nested
+      }
     }
     return null
   }
@@ -93,7 +121,8 @@ export function findClaudeBinary(
     join(home, '.local', 'bin', 'claude'),
     '/opt/homebrew/bin/claude',
     '/usr/local/bin/claude',
-    join(home, '.npm-global', 'bin', 'claude')
+    join(home, '.npm-global', 'bin', 'claude'),
+    join(home, '.npm-global', 'lib', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude')
   ]
   return candidates.find((p) => fs.exists(p)) ?? null
 }
@@ -106,8 +135,8 @@ export type RunFn = (
 
 const nodeRun: RunFn = (file, args, options) =>
   new Promise((resolve, reject) => {
-    // Kabuk YOK: "/usage" argumani kabukta dosya yoluna cevriliyor ve slash
-    // komutu duz prompt olarak modele gidip token yakiyor.
+    // Kabuk YOK: argumanlar dizi olarak gecer. Kabuk devreye girerse egik
+    // cizgiyle baslayan arguman Git Bash'te dosya yoluna cevrilir.
     execFile(file, [...args], { ...options, shell: false }, (error) => {
       if (error !== null) reject(error)
       else resolve()

@@ -57,6 +57,31 @@ describe('findClaudeBinary — Windows', () => {
     expect(findClaudeBinary('win32', env, fs)).toBeNull()
   })
 
+  it('surum altindaki hash klasorundeki exe bulunur', () => {
+    // Gercek kurulum bicimi budur: <surum>/<hash>/claude.exe. Bu seviye
+    // atlandigi icin kurtarma yolu uretimde hic calismiyordu.
+    const hashed = win32.join(base, '2.1.293', '83cb0bd7fed4', 'claude.exe')
+    const fs = fakeFs([hashed], {
+      [base]: ['2.1.293'],
+      [win32.join(base, '2.1.293')]: ['83cb0bd7fed4']
+    })
+    expect(findClaudeBinary('win32', env, fs)).toBe(hashed)
+  })
+
+  it('npm global kurulumunun gercek .exe si bulunur', () => {
+    // Shim degil, paketin kendi calistirilabiliri — execFile bunu kosturabilir.
+    const npmExe = win32.join(
+      roaming,
+      'npm',
+      'node_modules',
+      '@anthropic-ai',
+      'claude-code',
+      'bin',
+      'claude.exe'
+    )
+    expect(findClaudeBinary('win32', env, fakeFs([npmExe]))).toBe(npmExe)
+  })
+
   it('hicbir sey yoksa null', () => {
     expect(findClaudeBinary('win32', env, fakeFs([]))).toBeNull()
   })
@@ -106,6 +131,9 @@ describe('createCliRefresher', () => {
     // Kabuk olsaydi "/usage" dosya yoluna cevrilir, duz prompt olarak modele
     // gider ve token yakardi.
     expect(args).toEqual(['-p', '/usage', '--output-format', 'json'])
+    // `auth status` aga gitmez ve jetonu tazelemez; bu yolu degistirmek
+    // kurtarmayi sessizce ise yaramaz hale getirir.
+    expect(args).not.toContain('status')
   })
 
   it('calistirma hatasi yutulur, failed doner', async () => {

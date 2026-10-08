@@ -493,7 +493,7 @@ const ERROR_KEY: Record<CliErrorKind, MessageKey> = {
  * Hata sınıfına göre ayrı metin; tek genel "hata" yazılmaz (REQ-10 AC2).
  * Kullanıcının atacağı adım sınıftan sınıfa değişir.
  */
-function errorMessage(lang: Lang, kind: CliErrorKind, message: string): StatusMessage {
+function errorMessage(lang: Lang, kind: CliErrorKind): StatusMessage {
   if (kind === 'rate-limited') {
     // Kırılan bir şey yok: uç bizi bekletiyor, sınır açılınca ölçüm kendiliğinden
     // döner. "Hata" demek kullanıcıyı gereksiz müdahaleye iter. Aynı nedenle
@@ -501,11 +501,10 @@ function errorMessage(lang: Lang, kind: CliErrorKind, message: string): StatusMe
     // davranıştır, "(5x)" büyüyen bir arıza gibi okunur.
     return { text: t(lang, 'error.rateLimited'), tone: 'wait', showStreak: false }
   }
-  // Sınıflandırılamayan hatada uçtan gelen metin taşınır: bu çeviri değil, tanı
-  // verisidir. Boşsa sözlükteki genel karşılığa düşülür.
-  const detail = message.trim()
-  const text = kind === 'unknown' && detail !== '' ? detail : t(lang, ERROR_KEY[kind])
-  return { text, tone: 'error', showStreak: true }
+  // Ham tanı metni ekrana basılmaz. Uçtan gelen şeyler ("fetch failed",
+  // "HTTP 503") kullanıcıya ne yapacağını söylemez ve teknik kalır; sınıfın
+  // sözlükteki karşılığı yazılır. Ham ayrıntı ana süreçte loglanır.
+  return { text: t(lang, ERROR_KEY[kind]), tone: 'error', showStreak: true }
 }
 
 /** Alt satırda duran durum metni. Söylenecek bir şey yoksa satır hiç çizilmez. */
@@ -522,7 +521,7 @@ function statusMessage(lang: Lang, status: UsageStatus): StatusMessage | null {
     case 'no-data':
       return { text: t(lang, 'state.noMeasureYet'), tone: 'info', showStreak: false }
     case 'error':
-      return errorMessage(lang, status.errorKind, status.message)
+      return errorMessage(lang, status.errorKind)
   }
 }
 
