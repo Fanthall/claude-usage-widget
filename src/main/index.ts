@@ -12,7 +12,13 @@ import { pickLang, type Lang } from '../shared/i18n'
 import { createCollector, type CollectorState } from './core/collector'
 import { readAccountIdentity } from './core/identity'
 import { createUsageReader } from './core/usage-reader'
-import { loadConfig, saveConfig, type AppConfig, type WidgetBounds } from './core/config-store'
+import {
+  defaultConfig,
+  loadConfig,
+  saveConfig,
+  type AppConfig,
+  type WidgetBounds
+} from './core/config-store'
 import { appConfigFile, appDataDir } from './core/paths'
 import { safeLog } from './core/log-safe'
 import { scanClaudeSessions } from './platform/process-scan'
@@ -36,8 +42,19 @@ const isDev = !app.isPackaged
 /** Tray referansi modul kapsaminda tutulur; yerel degiskende cop toplayici ikonu yok eder. */
 let tray: Tray | null = null
 let widget: BrowserWindow | null = null
-let config: AppConfig
+/**
+ * Varsayilanla dolu baslar. `second-instance` dinleyicisi `whenReady`den ONCE
+ * kuruluyor; konfig dosyasi okunurken gelen ikinci calistirma burayi tanimsiz
+ * bulup ana surecte cokuyordu. Dosyadan gelen deger birkac ms sonra ustune yazar.
+ */
+let config: AppConfig = defaultConfig()
 let configFile: string
+/**
+ * Acilis tamamlandi mi. Tamamlanmadan pencere kurulmaz: hem konfig/`configFile`
+ * henuz okunmamis olur hem de `whenReady` kendi `createWidget()`ini calistirinca
+ * ikinci bir pencere acilip ilki sahipsiz kalirdi.
+ */
+let appReady = false
 let lastSessions: StatePayload['sessions'] = null
 let lastAuth: StatePayload['auth'] = null
 /**
@@ -314,6 +331,12 @@ function createWidget(): void {
 }
 
 function showWidget(): void {
+  // Acilis surerken gelen istek yok sayilir, ertelenmez: `whenReady` zaten
+  // pencereyi kurup gosterecek. Erken donmek bir sey kaybettirmez.
+  if (!appReady) {
+    safeLog('debug', 'acilis surerken gosterim istegi geldi, atlandi')
+    return
+  }
   if (widget === null) createWidget()
   widget?.showInactive()
   updateTray(collector.getState().status)
@@ -395,11 +418,15 @@ if (!singleInstance) {
     if (loaded.issues.length > 0) safeLog('warn', 'konfig sorunlari', { issues: loaded.issues })
 
     createTray()
-    createWidget()
+    if (widget === null) createWidget()
     widget?.once('ready-to-show', () => {
       widget?.showInactive()
       updateTray(collector.getState().status)
     })
+    // Bu satira kadar `await` YOK: arada bir olay isleyicisi devreye girip
+    // yarim kurulmus duruma dokunamaz. Yeni `await` eklenirse bu satir onun
+    // ustunde kalmali.
+    appReady = true
 
     collector.onChange(publish)
     collector.start()
