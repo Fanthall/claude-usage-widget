@@ -15,6 +15,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   ERROR_STREAK_FOR_ALERT,
   MAX_BACKOFF_MS,
+  RETRY_START_MS,
   staleThresholdMs,
   type CliErrorKind,
   type CollectorConfig,
@@ -22,6 +23,7 @@ import {
   type UsageStatus
 } from '../../shared/types'
 import { appendSnapshot } from './history-store'
+import { safeLog } from './log-safe'
 
 // ── Zamanlayici ──────────────────────────────────────────────────────────────
 
@@ -243,10 +245,29 @@ export function createCollector(deps: CollectorDeps, config: CollectorInit): Col
     }, intervalMs)
   }
 
-  /** 429 = "cok sik sordun". Sinir acilana kadar aralik ustel olarak buyur. */
+  /**
+   * Bir sonraki denemenin ne zaman olacagini hata turune gore ayarlar.
+   *
+   * 429 = "cok sik sordun": sinir acilana kadar aralik normal ritmin USTUNE
+   * ustel olarak buyur (tavan 1 saat).
+   *
+   * Diger hatalar = baglanti kurulamadi / uc gecici olarak cevap vermedi.
+   * Burada beklemek degil, erken donmek dogru: aralik once 30 sn'ye DUSER,
+   * sorun surerse normal ritme kadar ikiser ikiser buyur. Boylece kisa bir ag
+   * kesintisi dakikalarca hata ekrani birakmaz.
+   */
   function applyBackoff(failure: CliErrorKind): void {
-    if (failure !== 'rate-limited') return
-    intervalMs = Math.min(intervalMs * BACKOFF_FACTOR, MAX_BACKOFF_MS)
+    if (failure === 'rate-limited') {
+      intervalMs = Math.min(intervalMs * BACKOFF_FACTOR, MAX_BACKOFF_MS)
+      return
+    }
+    // Ilk hata sayactan anlasilir, araliktan DEGIL: buyume normal ritme
+    // ulasinca aralik base'e esitlenir ve "ilk hata" sanilip sifirlanirdi —
+    // 30→60→120→240→300→30 diye donup duran bir ritim olusuyordu.
+    intervalMs =
+      errorStreak <= 1
+        ? Math.min(RETRY_START_MS, baseIntervalMs)
+        : Math.min(intervalMs * BACKOFF_FACTOR, baseIntervalMs)
   }
 
   /**
@@ -270,6 +291,14 @@ export function createCollector(deps: CollectorDeps, config: CollectorInit): Col
     lastFailure = kind
     applyBackoff(kind)
     baseStatus = { kind: 'error', errorKind: kind, message, lastSnapshot }
+    // Ham tani ekranda gosterilmez ama bir yerde durmali: sinif tek basina
+    // "ag mi, uc mu, jeton mu" sorusunu cevaplamiyor.
+    safeLog('warn', 'olcum basarisiz', {
+      kind,
+      detail: message,
+      streak: errorStreak,
+      nextAttemptInSec: Math.round(intervalMs / 1000)
+    })
   }
 
   async function apply(result: UsageReadResult): Promise<void> {
@@ -297,6 +326,12 @@ export function createCollector(deps: CollectorDeps, config: CollectorInit): Col
       errorStreak += 1
       lastFailure = result.failure
       applyBackoff(result.failure)
+      safeLog('warn', 'tazeleme basarisiz, onbellege dusuldu', {
+        kind: result.failure,
+        snapshotAgeSec: Math.round((now() - snapshot.at) / 1000),
+        streak: errorStreak,
+        nextAttemptInSec: Math.round(intervalMs / 1000)
+      })
 
       // Onbellek hala tazeyse deger guvenilir; gecici bir tazeleme hatasi
       // kullaniciyi kirmiziya bogmamali. Ama deger bayatladiysa SEBEBI

@@ -20,7 +20,8 @@ import {
   type WidgetBounds
 } from './core/config-store'
 import { appConfigFile, appDataDir } from './core/paths'
-import { safeLog } from './core/log-safe'
+import { safeLog, setLogSink } from './core/log-safe'
+import { createFileSink } from './core/diag-log'
 import { scanClaudeSessions } from './platform/process-scan'
 import {
   applyIndicator,
@@ -411,6 +412,10 @@ if (!singleInstance) {
     if (process.platform === 'win32') app.setAppUserModelId('dev.fanthal.claude-usage-widget')
     // Arka plan araci: dock'ta yer kaplamaz (macOS LSUIElement karsiligi).
     if (process.platform === 'darwin') app.dock?.hide()
+
+    // Konfigten ONCE kurulur: acilista cikan sorunlar da kayda gecsin.
+    // Varsayilan `console` paketlenmis app'te hicbir yere gorunmuyor.
+    setLogSink(createFileSink(join(appDataDir(), 'diagnostics.log')))
 
     configFile = appConfigFile()
     const loaded = await loadConfig(configFile)

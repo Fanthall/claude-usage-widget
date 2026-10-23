@@ -185,6 +185,17 @@ export const BACKOFF_FACTOR = 2
 export const MAX_BACKOFF_MS = 60 * 60 * 1000
 
 /**
+ * Gecici hatadan (ag kopmasi, 5xx) sonraki ilk yeniden deneme araligi.
+ *
+ * 429'dan farkli ele alinir: uc bizi bekletmiyor, baglanti kurulamiyor. Normal
+ * ritmi (5 dk) beklemek, ag 30 sn'de geri gelse bile widget'i dakikalarca hata
+ * ekraninda birakir — kullanici bunu "otomatik calismiyor" diye gorur ve elle
+ * yeniler. Bu yuzden gecici hatada aralik KUCULUR, sonra normal ritme kadar
+ * ikiser ikiser buyur.
+ */
+export const RETRY_START_MS = 30 * 1000
+
+/**
  * Grafikte seriyi kesecek bosluk esigi. Sabit degil — olcum araligina bagli.
  * Sabit HISTORY_GAP_MS ile 5 dk'lik aralik secilirse ardisik HER cift bosluk
  * sayilir ve grafikte tek bir cizgi kalmaz; bu yuzden aralikla olceklenir.

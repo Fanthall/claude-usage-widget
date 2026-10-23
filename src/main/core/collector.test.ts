@@ -6,6 +6,7 @@ import {
   DEFAULT_POLL_INTERVAL_MS,
   ERROR_STREAK_FOR_ALERT,
   MAX_BACKOFF_MS,
+  RETRY_START_MS,
   staleThresholdMs,
   type CliErrorKind,
   type UsageSnapshot,
@@ -532,12 +533,51 @@ describe('createCollector — 429 geri cekilmesi', () => {
     expect(recovered.intervalMs).toBe(DEFAULT_POLL_INTERVAL_MS)
   })
 
-  it('429 disi hata araligi buyutmez', async () => {
+  it('429 disi hata araligi KUCULTUR — erken yeniden denenir', async () => {
+    // Ag kesintisi 30 sn surse bile normal ritmi beklemek widget'i dakikalarca
+    // hata ekraninda birakiyordu; kullanici bunu "otomatik calismiyor" diye
+    // gorup elle yeniliyordu.
     const harness = makeHarness({ respond: async () => none('unknown', 'aga erisilemedi') })
 
+    harness.collector.start()
     const state = await harness.collector.pollNow()
 
-    expect(state.intervalMs).toBe(DEFAULT_POLL_INTERVAL_MS)
+    expect(state.intervalMs).toBe(RETRY_START_MS)
+    expect(state.nextAttemptAtMs).toBe(START_MS + RETRY_START_MS)
+
+    harness.collector.stop()
+  })
+
+  it('gecici hata surerse aralik normal ritme kadar buyur, onu ASMAZ', async () => {
+    const harness = makeHarness({ respond: async () => none('unknown', 'aga erisilemedi') })
+
+    const seen: number[] = []
+    for (let i = 0; i < 6; i += 1) {
+      seen.push((await harness.collector.pollNow()).intervalMs)
+    }
+
+    expect(seen).toEqual([
+      RETRY_START_MS,
+      RETRY_START_MS * BACKOFF_FACTOR,
+      RETRY_START_MS * BACKOFF_FACTOR * BACKOFF_FACTOR,
+      RETRY_START_MS * BACKOFF_FACTOR * BACKOFF_FACTOR * BACKOFF_FACTOR,
+      DEFAULT_POLL_INTERVAL_MS,
+      DEFAULT_POLL_INTERVAL_MS
+    ])
+    // 429'un aksine normal ritmin ustune cikmaz: uc bizi bekletmiyor.
+    expect(Math.max(...seen)).toBe(DEFAULT_POLL_INTERVAL_MS)
+  })
+
+  it('gecici hatadan sonra taze olcum ritmi normale dondurur', async () => {
+    const harness = makeHarness({
+      respond: async (index) => {
+        if (index < 1) return none('unknown', 'aga erisilemedi')
+        return fresh(START_MS, 41)
+      }
+    })
+
+    expect((await harness.collector.pollNow()).intervalMs).toBe(RETRY_START_MS)
+    expect((await harness.collector.pollNow()).intervalMs).toBe(DEFAULT_POLL_INTERVAL_MS)
   })
 
   it('geri cekilme bayatlik esigini BUYUTMEZ', async () => {
