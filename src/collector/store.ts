@@ -68,8 +68,9 @@ const GROUP_EXPR: Record<Exclude<UsageGroup, 'device'>, string> = {
 }
 
 const MINUTE_MS = 60_000
-const SPARK_STEP_MS = 5 * MINUTE_MS
-const SPARK_POINTS = 36
+/** Kivilcim: son 3 saat, 5 dakikalik dilimler. Merkezden gelen diger cihazlar da ayni dilimlerle toplanir. */
+export const SPARK_STEP_MS = 5 * MINUTE_MS
+export const SPARK_POINTS = 36
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS files (

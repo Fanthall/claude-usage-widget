@@ -25,6 +25,7 @@ import { createKeychainTokenReader } from './core/keychain'
 import { readRange } from './core/history-store'
 import { writeTargets } from './core/hub-client'
 import { createHubSync, type HubSync } from './core/hub-sync'
+import { fetchOtherDevices, mergeTokens, type OtherDevicesTotals } from './core/token-totals'
 import { startTokenService, type HubSyncState, type TokenService } from './core/token-service'
 import type { WorkerHub } from './token-worker'
 import { createUsageReader } from './core/usage-reader'
@@ -83,6 +84,8 @@ let lastTokens: TokenState | null = null
 let lastHubState: HubSyncState | null = null
 /** Konfig okunduktan sonra kurulur: merkez adresleri konfigten gelir. */
 let hubSync: HubSync | null = null
+/** Bu cihaz disindaki cihazlarin token toplamlari (merkezden); widget toplami bununla kurar. */
+let otherDevices: OtherDevicesTotals | null = null
 /**
  * Kullanici pencereyi elle boyutlandirdi mi. Boyutlandirmadiysa widget icerige
  * oturur; boyutlandirdiysa sectigi olcu korunur. Oturum icinde tutulur —
@@ -372,7 +375,8 @@ function payload(): StatePayload {
   return {
     accounts: accounts?.accounts() ?? [],
     focus: config.focusAccount,
-    tokens: lastTokens,
+    // Hesabin tum cihazlari: bu cihaz yerelden, digerleri merkezden; merkez yoksa yalniz bu cihaz.
+    tokens: mergeTokens(lastTokens, otherDevices, hubConfigured(), Date.now()),
     sessions: lastSessions,
     // "Tepsi nesnesi var" degil, **gizlemek guvenli mi**. Gorunmeyen tepside
     // gizlemek widget-i geri getirilemez yapar; arayuz dugmeyi buna gore adlandirir.
@@ -599,6 +603,28 @@ function startHub(): void {
   accounts?.onChange(() => {
     if (hubSync?.phase() === 'ok') void hubSync.flushQuota().catch(() => undefined)
   })
+  void refreshOtherDevices()
+  setInterval(() => void refreshOtherDevices(), OTHER_DEVICES_REFRESH_MS)
+}
+
+/** Diger cihazlarin token toplamlari bu aralikla okunur (iki kucuk GET). */
+const OTHER_DEVICES_REFRESH_MS = 60 * 1000
+
+function hubConfigured(): boolean {
+  return config.hub.url !== null || config.hub.lanUrl !== null
+}
+
+async function refreshOtherDevices(): Promise<void> {
+  if (!hubConfigured()) return
+  const now = Date.now()
+  const dayStart = new Date(now).setHours(0, 0, 0, 0)
+  try {
+    // Okunamazsa eskisi kalir; bayatlayinca (3 dk) widget "yalniz bu cihaz" der.
+    otherDevices = (await fetchOtherDevices(hubFetch, config.hub, now, dayStart)) ?? otherDevices
+  } catch (error: unknown) {
+    safeLog('debug', 'diger cihazlarin tokenleri okunamadi', { error })
+  }
+  publish()
 }
 
 /** Kota disindaki bilgiler: hesap kimligi, kurumlar ve acik oturumlar. */

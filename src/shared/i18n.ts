@@ -83,6 +83,9 @@ export type MessageKey =
   | 'tokens.unavailable'
   | 'tokens.badLines'
   | 'tokens.cacheRead'
+  | 'tokens.thisDevice'
+  | 'tokens.deviceOnly'
+  | 'tokens.hubUnreachable'
   | 'unit.thousand'
   | 'unit.million'
   | 'unit.billion'
@@ -195,6 +198,9 @@ export const MESSAGES: Record<Lang, Record<MessageKey, string>> = {
     'tokens.unavailable': 'Token sayılamıyor',
     'tokens.badLines': '{count} satır okunamadı',
     'tokens.cacheRead': '+{value} önbellekten okuma',
+    'tokens.thisDevice': 'bu cihaz: {last15} · bugün {today}',
+    'tokens.deviceOnly': 'yalnız bu cihaz',
+    'tokens.hubUnreachable': 'merkeze ulaşılamadı',
     'unit.thousand': 'bin',
     'unit.million': 'mn',
     'unit.billion': 'mr',
@@ -307,6 +313,9 @@ export const MESSAGES: Record<Lang, Record<MessageKey, string>> = {
     'tokens.unavailable': 'Token count unavailable',
     'tokens.badLines': '{count} lines unreadable',
     'tokens.cacheRead': '+{value} read from cache',
+    'tokens.thisDevice': 'this device: {last15} · today {today}',
+    'tokens.deviceOnly': 'this device only',
+    'tokens.hubUnreachable': 'hub unreachable',
     'unit.thousand': 'K',
     'unit.million': 'M',
     'unit.billion': 'B',

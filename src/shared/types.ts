@@ -245,7 +245,20 @@ export interface AccountTokens {
   today: number
   /** Son 3 saat, 5 dakikalik dilimler, eskiden yeniye (36 deger). */
   spark: number[]
+  /**
+   * Yukaridaki sayilar hesabin TUM cihazlarinin toplamiysa (merkezden), bu
+   * cihazin kendi payi. Yalniz yerel sayi gosteriliyorsa yok.
+   */
+  own?: { last15m: number; today: number }
 }
+
+/**
+ * Token sayilarinin kapsami:
+ * - `device`: merkez tanimli degil; sayi bu cihazindir (etiket gerekmez).
+ * - `all`: hesabin tum cihazlari (bu cihaz yerelden, digerleri merkezden).
+ * - `device-offline`: merkez tanimli ama ulasilamadi; eksik sayi toplam gibi gorunmesin diye isaretlenir.
+ */
+export type TokenScope = 'device' | 'all' | 'device-offline'
 
 /** Gecmis taramasinin ilerlemesi. */
 export interface TokenScanProgress {
@@ -262,6 +275,8 @@ export interface TokenState {
   progress: TokenScanProgress | null
   /** Toplayici calisamiyorsa nedeni; sayilar gosterilmez. */
   error: string | null
+  /** Yoksa `device` (toplayicinin kendi yayini). */
+  scope?: TokenScope
 }
 
 // ── Pencere / IPC ────────────────────────────────────────────────────────────

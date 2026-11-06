@@ -9,7 +9,8 @@ import type {
 } from '@shared/types'
 
 /**
- * Onizleme token durumu (`?tokens=`): `ok` (varsayilan), `scan` (ilk tarama
+ * Onizleme token durumu (`?tokens=`): `ok` (varsayilan; tum cihazlar, bu cihazin payi), `device`
+ * (merkez yok), `offline` (merkeze ulasilamadi), `scan` (ilk tarama
  * suruyor), `error`, `off` (toplayici henuz cevap vermedi). Sayilar sahte.
  */
 function tokenState(wanted: string): TokenState | null {
@@ -19,15 +20,16 @@ function tokenState(wanted: string): TokenState | null {
     Array.from({ length: 36 }, (_, i) => Math.round((Math.sin(i / 4 + seed) + 1.3) * 60_000 + i * 2_000))
   return {
     accounts: [
-      // Olculen oran (2026-11-06): 15 dakikada ~0,5 mn yeni token, ~50 mn onbellekten okuma.
-      { key: 'personal', last15m: 540_000, cacheRead15m: 49_600_000, today: 12_400_000, spark: spark(0) },
-      { key: 'team', last15m: 180_000, cacheRead15m: 14_000_000, today: 3_100_000, spark: spark(2) }
+      // Olculen (2026-11-06): son 15 dk PC 76 bin + Mac 862 bin = 938 bin; onbellekten okuma ~50 mn.
+      { key: 'personal', last15m: 938_000, cacheRead15m: 49_600_000, today: 26_900_000, spark: spark(0), own: { last15m: 76_000, today: 25_400_000 } },
+      { key: 'team', last15m: 180_000, cacheRead15m: 14_000_000, today: 3_100_000, spark: spark(2), own: { last15m: 0, today: 0 } }
     ],
     progress:
       wanted === 'scan'
         ? { phase: 'initial', doneBytes: 3.1e9, totalBytes: 8.7e9, badLines: 0 }
         : { phase: 'idle', doneBytes: 0, totalBytes: 0, badLines: 0 },
-    error: null
+    error: null,
+    scope: wanted === 'device' ? 'device' : wanted === 'offline' ? 'device-offline' : 'all'
   }
 }
 

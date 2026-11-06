@@ -630,6 +630,7 @@ function TokenBlock({
               {t(lang, 'tokens.cacheRead', { value: formatTokens(lang, tokens.cacheRead15m) })}
             </span>
           ) : null}
+          <TokenScopeLine lang={lang} state={state} tokens={tokens} />
         </>
       )}
       {pct === null ? null : (
@@ -641,6 +642,38 @@ function TokenBlock({
         <span className="text-[9.5px] text-[#e0a33a]">{t(lang, 'tokens.badLines', { count: bad })}</span>
       ) : null}
     </div>
+  )
+}
+
+/**
+ * Sayının kapsamı. Toplam (tüm cihazlar) gösteriliyorsa bu cihazın payı;
+ * merkez tanımlı ama ulaşılamıyorsa "yalnız bu cihaz" — eksik sayı toplam
+ * gibi okunmasın. Merkez hiç tanımlı değilse satır yok.
+ */
+function TokenScopeLine({
+  lang,
+  state,
+  tokens
+}: {
+  lang: Lang
+  state: TokenState
+  tokens: AccountTokens
+}): React.ReactElement | null {
+  if (state.scope === 'device-offline') {
+    return (
+      <span className="text-[9.5px] text-[#e0a33a]">
+        {t(lang, 'tokens.deviceOnly')} · {t(lang, 'tokens.hubUnreachable')}
+      </span>
+    )
+  }
+  if (state.scope !== 'all' || tokens.own === undefined) return null
+  return (
+    <span className="text-[9.5px] text-[#8b8b94]">
+      {t(lang, 'tokens.thisDevice', {
+        last15: formatTokens(lang, tokens.own.last15m),
+        today: formatTokens(lang, tokens.own.today)
+      })}
+    </span>
   )
 }
 
@@ -657,13 +690,17 @@ function TokenLine({
   const tokens = tokensOf(state, account)
   if (state === null || state.error !== null || tokens === null) return null
   return (
-    <div className="flex justify-between gap-3 pt-[5px] text-[10px] whitespace-nowrap tabular-nums text-[#8b8b94]">
-      <span>{t(lang, 'tokens.last15')}</span>
-      <span>
-        <span className="text-[#f4f4f5]">{formatTokens(lang, tokens.last15m)}</span>
-        {' · '}
-        {t(lang, 'tokens.today', { value: formatTokens(lang, tokens.today) })}
-      </span>
+    <div className="flex flex-col pt-[5px] text-[10px] whitespace-nowrap tabular-nums text-[#8b8b94]">
+      <div className="flex justify-between gap-3">
+        <span>{t(lang, 'tokens.last15')}</span>
+        <span>
+          <span className="text-[#f4f4f5]">{formatTokens(lang, tokens.last15m)}</span>
+          {' · '}
+          {t(lang, 'tokens.today', { value: formatTokens(lang, tokens.today) })}
+        </span>
+      </div>
+      {/* Merkeze ulaşılamıyorsa sayı yalnız bu cihazınkidir. Ayrı kısa satır: aynı satırda widget'ı genişletiyordu. */}
+      {state.scope === 'device-offline' ? <span className="text-[#e0a33a]">{t(lang, 'tokens.deviceOnly')}</span> : null}
     </div>
   )
 }
