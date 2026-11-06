@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   APP_DIR_NAME,
+  accountPaths,
   CONFIG_FILE_NAME,
   appConfigFile,
   appDataDir,
@@ -249,5 +250,45 @@ describe('readClaudeIdentity', () => {
       }
     }
     expect(await readClaudeIdentity(fs, CONFIG_PATH)).toEqual({ machineId: null, email: null })
+  })
+})
+
+// ── accountPaths ─────────────────────────────────────────────────────────────
+
+describe('accountPaths', () => {
+  it('kisisel hesap varsayilan klasorde: hesap kaydi ev dizininde, CLAUDE_CONFIG_DIR verilmez', () => {
+    const p = accountPaths('personal', null, windowsEnv())
+    expect(p.configDir).toBe('C:\\Users\\ada\\.claude')
+    expect(p.accountFile).toBe('C:\\Users\\ada\\.claude.json')
+    expect(p.credentialsFile).toBe('C:\\Users\\ada\\.claude\\.credentials.json')
+    expect(p.projectsDir).toBe('C:\\Users\\ada\\.claude\\projects')
+    expect(p.cliConfigDir).toBeNull()
+  })
+
+  it('Team varsayilan olarak ~/.claude-team; hesap kaydi klasorun icinde', () => {
+    const p = accountPaths('team', null, macEnv())
+    expect(p.configDir).toBe('/Users/ada/.claude-team')
+    expect(p.accountFile).toBe('/Users/ada/.claude-team/.claude.json')
+    expect(p.credentialsFile).toBe('/Users/ada/.claude-team/.credentials.json')
+    expect(p.cliConfigDir).toBe('/Users/ada/.claude-team')
+  })
+
+  it('kisisel hesap ortamdaki CLAUDE_CONFIG_DIR ile Team klasorune kaymaz', () => {
+    const p = accountPaths('personal', null, linuxEnv({ CLAUDE_CONFIG_DIR: '/home/ada/.claude-team' }))
+    expect(p.configDir).toBe('/home/ada/.claude')
+    expect(p.cliConfigDir).toBeNull()
+  })
+
+  it('ayardan verilen klasor kullanilir', () => {
+    const p = accountPaths('team', 'D:\\claude-is', windowsEnv())
+    expect(p.configDir).toBe('D:\\claude-is')
+    expect(p.accountFile).toBe('D:\\claude-is\\.claude.json')
+    expect(p.cliConfigDir).toBe('D:\\claude-is')
+  })
+
+  it('varsayilan klasoru gosteren ayar varsayilan sayilir (Windows buyuk/kucuk harf, sondaki ayrac)', () => {
+    const p = accountPaths('personal', 'c:/users/ADA/.claude/', windowsEnv())
+    expect(p.accountFile).toBe('C:\\Users\\ada\\.claude.json')
+    expect(p.cliConfigDir).toBeNull()
   })
 })

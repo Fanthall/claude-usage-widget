@@ -1,16 +1,33 @@
-import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, screen } from 'electron'
-import { readFile } from 'node:fs/promises'
+import { app, BrowserWindow, Menu, Tray, ipcMain, nativeImage, net, screen } from 'electron'
+import { access, readFile } from 'node:fs/promises'
+import { hostname } from 'node:os'
 import { join } from 'node:path'
 
+import appIconPng from '../../build/icon.png?asset'
+import appIconIco from '../../build/icon.ico?asset'
+
 import {
+  ACCOUNT_KEYS,
+  isAccountKey,
   isWidgetTheme,
   THEME_MIN_SIZE,
+  type AccountKey,
   type StatePayload,
+  type TokenState,
   type UsageStatus
 } from '../shared/types'
-import { pickLang, type Lang } from '../shared/i18n'
-import { createCollector, type CollectorState } from './core/collector'
-import { readAccountIdentity } from './core/identity'
+import { formatPercent, pickLang, t, type Lang } from '../shared/i18n'
+import { createAccountManager, detectPresence, type AccountManager } from './core/accounts'
+import { createCliRefresher } from './core/cli-refresh'
+import { createCollector } from './core/collector'
+import { readAccountIdentity, readOrganizationId } from './core/identity'
+import { createKeychainTokenReader } from './core/keychain'
+import { readRange } from './core/history-store'
+import { writeTargets } from './core/hub-client'
+import { createHubSync, type HubSync } from './core/hub-sync'
+import { fetchOtherDevices, mergeTokens, type OtherDevicesTotals } from './core/token-totals'
+import { startTokenService, type HubSyncState, type TokenService } from './core/token-service'
+import type { WorkerHub } from './token-worker'
 import { createUsageReader } from './core/usage-reader'
 import {
   defaultConfig,
@@ -19,13 +36,14 @@ import {
   type AppConfig,
   type WidgetBounds
 } from './core/config-store'
-import { appConfigFile, appDataDir } from './core/paths'
+import { accountPaths, appConfigFile, appDataDir, nodePathFs, type AccountPaths } from './core/paths'
 import { safeLog, setLogSink } from './core/log-safe'
 import { createFileSink } from './core/diag-log'
 import { scanClaudeSessions } from './platform/process-scan'
 import {
   applyIndicator,
   buildTrayMenuTemplate,
+  composeAccountTooltip,
   createTrayImage,
   detectCapabilities,
   probeTrayPresence,
@@ -43,6 +61,8 @@ const isDev = !app.isPackaged
 /** Tray referansi modul kapsaminda tutulur; yerel degiskende cop toplayici ikonu yok eder. */
 let tray: Tray | null = null
 let widget: BrowserWindow | null = null
+/** Ayrintili panel penceresi; kapaninca null. */
+let panel: BrowserWindow | null = null
 /**
  * Varsayilanla dolu baslar. `second-instance` dinleyicisi `whenReady`den ONCE
  * kuruluyor; konfig dosyasi okunurken gelen ikinci calistirma burayi tanimsiz
@@ -57,7 +77,15 @@ let configFile: string
  */
 let appReady = false
 let lastSessions: StatePayload['sessions'] = null
-let lastAuth: StatePayload['auth'] = null
+/** Konfig okunduktan sonra kurulur: hesap klasorleri konfigten gelir. */
+let accounts: AccountManager | null = null
+let tokens: TokenService | null = null
+let lastTokens: TokenState | null = null
+let lastHubState: HubSyncState | null = null
+/** Konfig okunduktan sonra kurulur: merkez adresleri konfigten gelir. */
+let hubSync: HubSync | null = null
+/** Bu cihaz disindaki cihazlarin token toplamlari (merkezden); widget toplami bununla kurar. */
+let otherDevices: OtherDevicesTotals | null = null
 /**
  * Kullanici pencereyi elle boyutlandirdi mi. Boyutlandirmadiysa widget icerige
  * oturur; boyutlandirdiysa sectigi olcu korunur. Oturum icinde tutulur —
@@ -169,26 +197,187 @@ function menuFrom(template: TrayMenuItem[]): Electron.Menu {
 }
 
 function onMenuAction(action: TrayMenuItem['action']): void {
-  if (action === 'toggle-widget' || action === 'open-panel') toggleWidget()
-  else if (action === 'refresh') void collector.pollNow()
+  if (action === 'toggle-widget') toggleWidget()
+  else if (action === 'open-panel') openPanel()
+  else if (action === 'refresh') void accounts?.pollAll()
   else if (action === 'quit') app.quit()
 }
 
 /**
- * Kota verisi artik `claude` calistirilabilirinden GELMIYOR: once uc, olmazsa
- * yapisal onbellek. Boylece 429 gizlenmiyor ve GUI app'in minimal PATH'i
- * (macOS'ta kesfin en buyuk kirilma sebebi) veri yolunu etkilemiyor.
+ * Planli olcumlere eklenen rastgele kayma. Ayni hesabi ikinci bir cihaz da
+ * soruyorsa istekler ayni ana yigilmaz (kota ucu sik soruluca 429 veriyor).
  */
-const readUsage = createUsageReader({ fs: { readFile: (file) => readFile(file, 'utf8') } })
+const POLL_JITTER_MS = 30 * 1000
 
-const collector = createCollector({ readUsage }, { dataDir })
+function pathsFor(key: AccountKey): AccountPaths {
+  return accountPaths(key, config.accountDirs[key])
+}
 
-function payloadFrom(state: CollectorState): StatePayload {
+/**
+ * Pencere simgesi acikca verilir. Paketli uygulamada Windows simgeyi exe'den
+ * alir, ama gelistirmede ve testte calisan `electron.exe` kendi simgesini
+ * gosteriyordu (kullanici panel basliginda eski simgeyi gordu). macOS pencere
+ * simgesi kullanmaz.
+ */
+function windowIcon(): { icon?: string } {
+  if (process.platform === 'win32') return { icon: appIconIco }
+  if (process.platform === 'linux') return { icon: appIconPng }
+  return {}
+}
+
+/** Kota tarihcesi: kisisel hesabinki eski yerinde kalir; digerleri kendi alt klasorunde. */
+function historyDirFor(key: AccountKey): string {
+  return key === 'personal' ? dataDir : join(dataDir, 'accounts', key)
+}
+
+/**
+ * Chromium ag yigini: sistem vekil sunucusunu ve sertifika deposunu kullanir.
+ * Sirket aginda TLS'i acip yeniden imzalayan vekil varsa Node'un kendi
+ * `fetch`i sertifikayi tanimaz; `net.fetch` isletim sisteminin tanidigini tanir.
+ */
+const hubFetch = (input: string, init?: RequestInit): Promise<Response> => net.fetch(input, init)
+
+/** Toplayicinin merkeze gonderim ayari; kayit yoksa gonderim yok. */
+function workerHub(): WorkerHub | null {
+  const targets = writeTargets(config.hub)
+  return targets.length === 0 ? null : { targets, sendProjectNames: config.shareProjectPaths }
+}
+
+/** Ilk taramanin yuzdesi; tarama bittiyse 100, toplayici yoksa null. */
+function scanPct(): number | null {
+  const p = lastTokens?.progress
+  if (p === undefined || p === null) return null
+  if (p.phase === 'idle') return 100
+  return p.totalBytes > 0 ? Math.min(99, Math.floor((p.doneBytes / p.totalBytes) * 100)) : 0
+}
+
+function createHub(): HubSync {
+  return createHubSync({
+    fetch: hubFetch,
+    now: Date.now,
+    accounts: ACCOUNT_KEYS,
+    getHub: () => config.hub,
+    saveHub: async (hub) => {
+      config = { ...config, hub }
+      await saveConfig(configFile, config)
+      tokens?.setHub(workerHub())
+      safeLog('info', 'merkeze cihaz kaydi yapildi', { deviceId: hub.deviceId })
+    },
+    deviceName: () => config.hub.deviceName ?? hostname(),
+    os: process.platform,
+    version: app.getVersion(),
+    readQuota: async (account, from, to) => {
+      const { entries } = await readRange(historyDirFor(account), from, to - 1)
+      return entries
+        .filter((e) => e.windows.length > 0)
+        .map((e) => ({
+          account,
+          fetchedAt: e.at,
+          windows: e.windows.map((w) => ({ label: w.label, percent: w.percent, resetsAtMs: w.resetsAtMs }))
+        }))
+    },
+    collectorInfo: () => ({ queue: lastHubState?.queue ?? null, scanPct: scanPct() }),
+    localUsage: async (from, to, step, by, deviceId) => (await tokens?.usage(from, to, step, by, deviceId)) ?? null
+  })
+}
+
+/**
+ * Ayrintili panel: merkezin sayfasinin aynisi, uygulamanin icinden. Veri ana
+ * surec uzerinden gelir (cihaz anahtari sayfaya hic inmez); merkez yoksa bu
+ * cihazin kendi verisi gosterilir.
+ */
+function openPanel(): void {
+  if (panel !== null && !panel.isDestroyed()) {
+    if (panel.isMinimized()) panel.restore()
+    panel.show()
+    panel.focus()
+    return
+  }
+  const win = new BrowserWindow({
+    width: 1320,
+    height: 900,
+    minWidth: 380,
+    minHeight: 480,
+    show: false,
+    backgroundColor: '#0e0e10',
+    autoHideMenuBar: true,
+    title: t(lang, 'panel.title'),
+    ...windowIcon(),
+    webPreferences: {
+      preload: join(__dirname, '../preload/panel.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true
+    }
+  })
+  panel = win
+  // Panel baska pencere acmaz, baska sayfaya gitmez.
+  win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  win.webContents.on('will-navigate', (event) => event.preventDefault())
+  win.once('ready-to-show', () => win.show())
+  win.on('closed', () => {
+    if (panel === win) panel = null
+  })
+  void win.loadFile(join(__dirname, '../panel/index.html'))
+}
+
+/**
+ * Kota verisi `claude` calistirilabilirinden GELMIYOR: once uc, olmazsa yapisal
+ * onbellek. CLI yalniz suresi dolmus jetonu tazelemek icin, hesabin kendi
+ * klasoruyle calistirilir.
+ */
+function createAccountCollector(key: AccountKey): ReturnType<typeof createCollector> {
+  const paths = pathsFor(key)
+  const readUsage = createUsageReader({
+    fs: { readFile: (file) => readFile(file, 'utf8') },
+    files: { accountFile: paths.accountFile, credentialsFile: paths.credentialsFile },
+    refreshToken: createCliRefresher({ configDir: paths.cliConfigDir }),
+    // macOS'ta jeton dosyada degil Anahtar Zinciri'nde.
+    ...(process.platform === 'darwin' ? { readToken: createKeychainTokenReader(paths.cliConfigDir) } : {})
+  })
+  // Konfigdeki aralik (en az 2 dk, bkz. MIN_POLL_INTERVAL_MS). F1'de verilmeyi unutulmustu; ayar olu kalmis,
+  // toplayici hep varsayilan 5 dk ile calismisti (olculdu: son 24 saatte 287 olcum).
+  return createCollector(
+    { readUsage },
+    { dataDir: historyDirFor(key), pollIntervalMs: config.pollIntervalMs, jitterMs: POLL_JITTER_MS }
+  )
+}
+
+async function fileExists(file: string): Promise<boolean> {
+  try {
+    await access(file)
+    return true
+  } catch {
+    return false
+  }
+}
+
+function createAccounts(): AccountManager {
+  return createAccountManager({
+    presence: (key) =>
+      detectPresence(pathsFor(key), (file) => readAccountIdentity(nodePathFs, file), fileExists),
+    readAuth: (key) => readAccountIdentity(nodePathFs, pathsFor(key).accountFile),
+    createCollector: createAccountCollector
+  })
+}
+
+/**
+ * Buyuk sayida ve tepside gosterilen hesabin durumu. Secili hesap bagli
+ * degilse tepside "yukleniyor" degil "veri yok" gorunur; aksi halde gosterge
+ * sonsuza dek bekliyor gibi durur.
+ */
+function focusStatus(): UsageStatus {
+  const focused = accounts?.accounts().find((a) => a.key === config.focusAccount)
+  return focused?.status ?? { kind: 'loading' }
+}
+
+function payload(): StatePayload {
   return {
-    status: state.status,
-    auth: lastAuth,
+    accounts: accounts?.accounts() ?? [],
+    focus: config.focusAccount,
+    // Hesabin tum cihazlari: bu cihaz yerelden, digerleri merkezden; merkez yoksa yalniz bu cihaz.
+    tokens: mergeTokens(lastTokens, otherDevices, hubConfigured(), Date.now()),
     sessions: lastSessions,
-    errorStreak: state.errorStreak,
     // "Tepsi nesnesi var" degil, **gizlemek guvenli mi**. Gorunmeyen tepside
     // gizlemek widget-i geri getirilemez yapar; arayuz dugmeyi buna gore adlandirir.
     trayAvailable: caps.canHideWidget,
@@ -196,10 +385,26 @@ function payloadFrom(state: CollectorState): StatePayload {
   }
 }
 
+/** Tepsi ipucunun ust ve alt satiri: secili hesabin adi, digerlerinin ozeti. */
+function accountTooltipLines(): { header: string; others: string[] } {
+  const all = accounts?.accounts() ?? []
+  const label = (key: AccountKey): string => t(lang, key === 'personal' ? 'account.personal' : 'account.team')
+  const others = all
+    .filter((a) => a.key !== config.focusAccount)
+    .map((a) => {
+      if (a.presence === 'not-connected') return `${label(a.key)}: ${t(lang, 'account.notConnected')}`
+      const s = a.status
+      const snap = s.kind === 'ok' || s.kind === 'stale' ? s.snapshot : s.kind === 'error' ? s.lastSnapshot : null
+      const session = snap?.windows.find((w) => /session/i.test(w.label)) ?? snap?.windows[0]
+      return session === undefined ? `${label(a.key)}: —` : `${label(a.key)}: ${formatPercent(lang, session.percent)}`
+    })
+  return { header: label(config.focusAccount), others }
+}
+
 function updateTray(status: UsageStatus): void {
   if (tray === null) return
   const widgetVisible = widget?.isVisible() ?? false
-  applyIndicator(
+  const plan = applyIndicator(
     asTrayLike(tray),
     status,
     caps,
@@ -219,15 +424,18 @@ function updateTray(status: UsageStatus): void {
     },
     { widgetVisible, lang }
   )
+  // Ipucu hangi hesabin gosterildigini soyler; digeri tek satirda durur.
+  const lines = accountTooltipLines()
+  tray.setToolTip(composeAccountTooltip(plan.tooltip, lines.header, lines.others))
   // Menuyu applyIndicator da deps.buildMenu ile kuruyor; ikisi ayni dili
   // almazsa sonuncusu kazanir ve menu diger dilde kalir.
   tray.setContextMenu(menuFrom(buildTrayMenuTemplate(status, { widgetVisible, lang })))
 }
 
-function publish(state: CollectorState): void {
-  updateTray(state.status)
+function publish(): void {
+  updateTray(focusStatus())
   if (widget !== null && !widget.isDestroyed()) {
-    widget.webContents.send('usage:state', payloadFrom(state))
+    widget.webContents.send('usage:state', payload())
   }
 }
 
@@ -282,6 +490,7 @@ function createWidget(): void {
     skipTaskbar: true,
     show: false,
     fullscreenable: false,
+    ...windowIcon(),
     webPreferences: {
       preload: join(__dirname, '../preload/index.js'),
       contextIsolation: true,
@@ -340,26 +549,90 @@ function showWidget(): void {
   }
   if (widget === null) createWidget()
   widget?.showInactive()
-  updateTray(collector.getState().status)
+  updateTray(focusStatus())
 }
 
 function toggleWidget(): void {
   if (widget !== null && widget.isVisible()) {
     widget.hide()
-    updateTray(collector.getState().status)
+    updateTray(focusStatus())
     return
   }
   showWidget()
 }
 
-/** Kota disindaki bilgiler: hesap kimligi ve acik oturumlar. */
-async function refreshSideChannels(): Promise<void> {
-  try {
-    // Kimlik de dosyadan okunur; `claude auth status` cagrisina gerek yok.
-    lastAuth = await readAccountIdentity()
-  } catch (error: unknown) {
-    safeLog('debug', 'hesap bilgisi okunamadi', { error })
+/** Hesaplarin kurum kimlikleri; token kayitlarini hesaplara baglar. */
+async function readOrgs(): Promise<{ personal: string | null; team: string | null }> {
+  const [personal, team] = await Promise.all(
+    (['personal', 'team'] as const).map((key) =>
+      readOrganizationId(nodePathFs, pathsFor(key).accountFile).catch(() => null)
+    )
+  )
+  return { personal: personal ?? null, team: team ?? null }
+}
+
+/** Token toplayici surecini baslatir; ozet geldikce widget'a yayinlanir. */
+async function startTokens(): Promise<void> {
+  tokens = startTokenService({
+    dbFile: join(dataDir, 'usage.db'),
+    sources: ACCOUNT_KEYS.map((key) => ({ account: key, projectsDir: pathsFor(key).projectsDir })),
+    keys: [...ACCOUNT_KEYS],
+    orgs: await readOrgs(),
+    hub: workerHub(),
+    onState: (state) => {
+      lastTokens = state
+      publish()
+    },
+    onHubState: (state) => {
+      lastHubState = state
+    }
+  })
+}
+
+/** Merkez nabzi, kota gonderimi ve (ev agindaysa) ilk kayit bu aralikla. */
+const HUB_TICK_MS = 5 * 60 * 1000
+
+function startHub(): void {
+  hubSync = createHub()
+  const tick = (): void => {
+    void hubSync?.tick().catch((error: unknown) => safeLog('warn', 'merkez turu basarisiz', { error }))
   }
+  tick()
+  setInterval(tick, HUB_TICK_MS)
+  // Yeni kota olcumu gelince beklemeden gonderilir; kayitli degilse bir sey yapmaz.
+  accounts?.onChange(() => {
+    if (hubSync?.phase() === 'ok') void hubSync.flushQuota().catch(() => undefined)
+  })
+  void refreshOtherDevices()
+  setInterval(() => void refreshOtherDevices(), OTHER_DEVICES_REFRESH_MS)
+}
+
+/** Diger cihazlarin token toplamlari bu aralikla okunur (iki kucuk GET). */
+const OTHER_DEVICES_REFRESH_MS = 60 * 1000
+
+function hubConfigured(): boolean {
+  return config.hub.url !== null || config.hub.lanUrl !== null
+}
+
+async function refreshOtherDevices(): Promise<void> {
+  if (!hubConfigured()) return
+  const now = Date.now()
+  const dayStart = new Date(now).setHours(0, 0, 0, 0)
+  try {
+    // Okunamazsa eskisi kalir; bayatlayinca (3 dk) widget "yalniz bu cihaz" der.
+    otherDevices = (await fetchOtherDevices(hubFetch, config.hub, now, dayStart)) ?? otherDevices
+  } catch (error: unknown) {
+    safeLog('debug', 'diger cihazlarin tokenleri okunamadi', { error })
+  }
+  publish()
+}
+
+/** Kota disindaki bilgiler: hesap kimligi, kurumlar ve acik oturumlar. */
+async function refreshSideChannels(): Promise<void> {
+  // Kimlik dosyadan okunur; `claude auth status` cagrisina gerek yok.
+  await accounts?.refreshIdentity()
+  // Team'e sonradan giris yapilmissa kurumu simdi ogrenilir.
+  if (tokens !== null) tokens.setOrgs(await readOrgs())
   try {
     lastSessions = await scanClaudeSessions()
   } catch (error: unknown) {
@@ -406,7 +679,7 @@ if (!singleInstance) {
   void app.whenReady().then(async () => {
     lang = pickLang(app.getLocale())
     // Tepsi bu satirdan once kurulmus olabilir; dil belli olunca yeniden cizilir.
-    updateTray(collector.getState().status)
+    updateTray(focusStatus())
     safeLog('debug', 'arayuz dili', { locale: app.getLocale(), secilen: lang })
 
     if (process.platform === 'win32') app.setAppUserModelId('dev.fanthal.claude-usage-widget')
@@ -421,22 +694,34 @@ if (!singleInstance) {
     const loaded = await loadConfig(configFile)
     config = loaded.config
     if (loaded.issues.length > 0) safeLog('warn', 'konfig sorunlari', { issues: loaded.issues })
+    accounts = createAccounts()
 
     createTray()
     if (widget === null) createWidget()
     widget?.once('ready-to-show', () => {
       widget?.showInactive()
-      updateTray(collector.getState().status)
+      updateTray(focusStatus())
     })
     // Bu satira kadar `await` YOK: arada bir olay isleyicisi devreye girip
     // yarim kurulmus duruma dokunamaz. Yeni `await` eklenirse bu satir onun
     // ustunde kalmali.
     appReady = true
 
-    collector.onChange(publish)
-    collector.start()
-    void collector.pollNow()
-    void refreshSideChannels().then(() => publish(collector.getState()))
+    accounts.onChange(publish)
+    void accounts
+      .start()
+      .then(() => refreshSideChannels())
+      .then(() => publish())
+    startTokens()
+      .catch((error: unknown) => {
+        safeLog('warn', 'toplayici sureci baslatilamadi', { error })
+        lastTokens = { accounts: [], progress: null, error: 'toplayici baslatilamadi' }
+        publish()
+      })
+      // Merkez toplayicidan sonra: kayit olunca anahtar toplayiciya iletilir.
+      .finally(() => startHub())
+    // Kurum kimlikleri ve oturumlar seyrek degisir; on dakikada bir tazelenir.
+    setInterval(() => void refreshSideChannels().then(() => publish()), 10 * 60 * 1000)
 
     ipcMain.handle('widget:theme', (_event, theme: unknown) => {
       if (!isWidgetTheme(theme) || widget === null) return
@@ -517,14 +802,33 @@ if (!singleInstance) {
         return
       }
       widget?.hide()
-      updateTray(collector.getState().status)
+      updateTray(focusStatus())
     })
 
-    ipcMain.handle('usage:get', () => payloadFrom(collector.getState()))
+    ipcMain.handle('widget:account', (_event, key: unknown) => {
+      if (!isAccountKey(key) || key === config.focusAccount) return
+      config = { ...config, focusAccount: key }
+      void saveConfig(configFile, config).catch(() => undefined)
+      publish()
+    })
+
+    ipcMain.handle('widget:panel', () => openPanel())
+    // Panel penceresinin tek veri yolu. Yol `panelGet` icinde dogrulanir:
+    // bilinen okuma uclari disinda istek yapilmaz.
+    ipcMain.handle('panel:get', async (_event, path: unknown) => {
+      if (typeof path !== 'string' || hubSync === null) return { ok: false, local: true, body: null }
+      return await hubSync.panelGet(path)
+    })
+    ipcMain.handle('panel:lang', () => lang)
+
+    ipcMain.handle('usage:get', () => payload())
     ipcMain.handle('usage:refresh', async () => {
+      // Elle yenileme bagli olmayan hesabi da yoklar: Team'e az once giris
+      // yapildiysa bes dakikayi beklemeden gorunur.
       await refreshSideChannels()
-      const state = await collector.pollNow()
-      return payloadFrom(state)
+      tokens?.rescan()
+      await accounts?.pollAll()
+      return payload()
     })
   })
 
@@ -533,5 +837,8 @@ if (!singleInstance) {
     if (tray === null) app.quit()
   })
 
-  app.on('before-quit', () => collector.stop())
+  app.on('before-quit', () => {
+    accounts?.stop()
+    tokens?.stop()
+  })
 }

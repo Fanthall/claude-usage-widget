@@ -26,14 +26,12 @@ import { safeLog } from './log-safe'
 import {
   claudeConfigFile,
   claudeHomeDir,
+  CREDENTIALS_FILE_NAME,
   nodePathEnv,
   nodePathFs,
   type PathEnv,
   type PathFs
 } from './paths'
-
-/** CLI'in OAuth jetonunu tuttugu dosyanin adi (`~/.claude/` altinda). */
-export const CREDENTIALS_FILE_NAME = '.credentials.json'
 
 /** `~/.claude/.credentials.json` — jeton dosyasinin tam yolu. */
 export function claudeCredentialsFile(env: PathEnv = nodePathEnv()): string {
@@ -133,6 +131,19 @@ export async function readAccountIdentity(
     return loggedOut()
   }
   return { loggedIn: true, email, orgName, subscriptionType }
+}
+
+/**
+ * Hesabin kurum kimligi (`oauthAccount.organizationUuid`). Token kayitlarindaki
+ * oturumlari hesaplara baglamak icin kullanilir. LOGLANMAZ, arayuze gitmez.
+ */
+export async function readOrganizationId(
+  fs: PathFs = nodePathFs,
+  file: string = claudeConfigFile()
+): Promise<string | null> {
+  const root = await readJsonObject(fs, file, 'hesap dosyasi')
+  const account = root?.['oauthAccount']
+  return isPlainObject(account) ? stringOrNull(account['organizationUuid']) : null
 }
 
 // ── Erisim jetonu ────────────────────────────────────────────────────────────

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 
 import {
   createCliRefresher,
+  refreshEnv,
   findClaudeBinary,
   REFRESH_COOLDOWN_MS,
   sortVersionsDesc,
@@ -175,5 +176,61 @@ describe('createCliRefresher', () => {
     bin = '/bin/claude'
     simdi += 1000
     expect(await refresh()).toBe('refreshed')
+  })
+})
+
+describe('refreshEnv', () => {
+  const base = {
+    PATH: '/usr/bin',
+    HOME: '/home/ada',
+    CLAUDE_CODE_OAUTH_TOKEN: 'gizli',
+    CLAUDE_CODE_SESSION_ID: 'oturum',
+    ANTHROPIC_BASE_URL: 'http://127.0.0.1:1234',
+    anthropic_api_key: 'gizli',
+    CLAUDE_CONFIG_DIR: '/home/ada/.claude-team'
+  }
+
+  it('devralinan oturum ve kimlik degiskenlerini temizler, gerisini korur', () => {
+    const env = refreshEnv(base, null)
+    expect(env).toEqual({ PATH: '/usr/bin', HOME: '/home/ada' })
+  })
+
+  it('hesap klasorunu yalniz CLAUDE_CONFIG_DIR ile verir', () => {
+    const env = refreshEnv(base, '/home/ada/.claude-team')
+    expect(env['CLAUDE_CONFIG_DIR']).toBe('/home/ada/.claude-team')
+    expect(env['CLAUDE_CODE_OAUTH_TOKEN']).toBeUndefined()
+  })
+
+  it('kaynak ortami degistirmez', () => {
+    const copy = { ...base }
+    refreshEnv(copy, null)
+    expect(copy).toEqual(base)
+  })
+})
+
+describe('createCliRefresher ortami', () => {
+  it('Team hesabinda CLI temiz ortam ve hesabin klasoruyle calisir', async () => {
+    const run = vi.fn(async () => undefined)
+    const refresh = createCliRefresher({
+      findBinary: () => '/bin/claude',
+      run,
+      configDir: '/home/ada/.claude-team',
+      baseEnv: { PATH: '/usr/bin', CLAUDE_CODE_OAUTH_TOKEN: 'gizli' }
+    })
+    expect(await refresh()).toBe('refreshed')
+    const options = (run.mock.calls[0] as unknown[] | undefined)?.[2] as { env: NodeJS.ProcessEnv }
+    expect(options.env).toEqual({ PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/home/ada/.claude-team' })
+  })
+
+  it('kisisel hesapta CLAUDE_CONFIG_DIR verilmez, devralinmis olsa bile', async () => {
+    const run = vi.fn(async () => undefined)
+    const refresh = createCliRefresher({
+      findBinary: () => '/bin/claude',
+      run,
+      baseEnv: { PATH: '/usr/bin', CLAUDE_CONFIG_DIR: '/home/ada/.claude-team' }
+    })
+    await refresh()
+    const options = (run.mock.calls[0] as unknown[] | undefined)?.[2] as { env: NodeJS.ProcessEnv }
+    expect(options.env).toEqual({ PATH: '/usr/bin' })
   })
 })

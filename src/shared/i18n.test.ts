@@ -4,6 +4,8 @@ import {
   MESSAGES,
   formatAgo,
   formatDuration,
+  formatPercent,
+  formatTokens,
   pickLang,
   t,
   type Lang,
@@ -32,10 +34,12 @@ function withoutPlaceholders(text: string): string {
  * TR ve EN metni ayni olmasi **kabul edilen** anahtarlar.
  *
  * Ozel ad, marka ve kisaltmalar iki dilde de ayni yazilir; boyle bir anahtar
- * cikarsa buraya gerekcesiyle eklenir. Su an bos: sozlukteki her anahtar iki
- * dilde farkli metin tasiyor, yani kopyala-yapistir unutmasi yok.
+ * cikarsa buraya gerekcesiyle eklenir.
+ *
+ * - `account.team`: "Team", Anthropic'in plan adi; Turkce arayuzde de boyle anilir.
+ * - `panel.breakdown.model`: "Model" iki dilde ayni sozcuk.
  */
-const IDENTICAL_ALLOWED: ReadonlySet<MessageKey> = new Set<MessageKey>()
+const IDENTICAL_ALLOWED: ReadonlySet<MessageKey> = new Set<MessageKey>(['account.team', 'panel.breakdown.model'])
 
 const MS = {
   second: 1_000,
@@ -304,5 +308,24 @@ describe('MESSAGES kapsamasi', () => {
     const leaks = /\b(reset|left|measured|measuring|stale|view|show|hide|quit|refresh)\b/i
     const suspects = ALL_KEYS.filter((key) => leaks.test(withoutPlaceholders(MESSAGES.tr[key])))
     expect(suspects).toEqual([])
+  })
+})
+
+describe('formatPercent', () => {
+  it('Turkcede isaret sayidan once (TDK), Ingilizcede sonra', () => {
+    expect(formatPercent('tr', 65)).toBe('%65')
+    expect(formatPercent('en', 65)).toBe('65%')
+    expect(formatPercent('tr', 0)).toBe('%0')
+  })
+})
+
+describe('formatTokens', () => {
+  it('Turkcede virgul ve bosluklu birim, Ingilizcede nokta ve bitisik', () => {
+    expect(formatTokens('tr', 1_840_000)).toBe('1,8 mn')
+    expect(formatTokens('en', 1_840_000)).toBe('1.8M')
+    expect(formatTokens('tr', 58_700_000_000)).toBe('59 mr')
+    expect(formatTokens('en', 12_300)).toBe('12K')
+    expect(formatTokens('tr', 850)).toBe('850')
+    expect(formatTokens('tr', 0)).toBe('0')
   })
 })

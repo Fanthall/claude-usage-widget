@@ -130,8 +130,30 @@ export function findClaudeBinary(
 export type RunFn = (
   file: string,
   args: readonly string[],
-  options: { timeout: number; windowsHide: boolean }
+  options: { timeout: number; windowsHide: boolean; env: NodeJS.ProcessEnv }
 ) => Promise<void>
+
+/** CLI'a gecmemesi gereken degiskenler: hangi hesapla calisacagini belirleyebilirler. */
+const INHERITED_AUTH_ENV = /^(CLAUDE_CODE_|ANTHROPIC_)/i
+
+/**
+ * CLI'a verilecek ortam.
+ *
+ * Widget bir Claude Code oturumundan baslatildiginda o oturumun degiskenlerini
+ * devralir (`CLAUDE_CODE_*`, `ANTHROPIC_*`; bir Desktop oturumunda 27 tane,
+ * olculdu 2026-11-06). Kalirlarsa CLI hesabi ayar klasorunden degil bu
+ * degiskenlerden alabilir ve Team tazelemesi kisisel girisi kullanirdi. Hesap
+ * yalniz `CLAUDE_CONFIG_DIR` ile secilir; varsayilan klasorde o da verilmez.
+ */
+export function refreshEnv(base: NodeJS.ProcessEnv, configDir: string | null): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {}
+  for (const [name, value] of Object.entries(base)) {
+    if (INHERITED_AUTH_ENV.test(name) || name.toUpperCase() === 'CLAUDE_CONFIG_DIR') continue
+    env[name] = value
+  }
+  if (configDir !== null) env['CLAUDE_CONFIG_DIR'] = configDir
+  return env
+}
 
 const nodeRun: RunFn = (file, args, options) =>
   new Promise((resolve, reject) => {
@@ -147,6 +169,10 @@ export interface RefreshDeps {
   findBinary?: () => string | null
   run?: RunFn
   now?: () => number
+  /** Hesabin `CLAUDE_CONFIG_DIR` degeri; varsayilan klasorde null. */
+  configDir?: string | null
+  /** Temizlenecek temel ortam; verilmezse surecin kendi ortami. */
+  baseEnv?: NodeJS.ProcessEnv
 }
 
 export type RefreshOutcome = 'refreshed' | 'no-cli' | 'failed' | 'cooling-down'
@@ -161,6 +187,7 @@ export function createCliRefresher(deps: RefreshDeps = {}): () => Promise<Refres
   const find = deps.findBinary ?? (() => findClaudeBinary())
   const run = deps.run ?? nodeRun
   const now = deps.now ?? Date.now
+  const configDir = deps.configDir ?? null
 
   let lastAttemptMs: number | null = null
 
@@ -175,7 +202,8 @@ export function createCliRefresher(deps: RefreshDeps = {}): () => Promise<Refres
     try {
       await run(bin, ['-p', '/usage', '--output-format', 'json'], {
         timeout: REFRESH_TIMEOUT_MS,
-        windowsHide: true
+        windowsHide: true,
+        env: refreshEnv(deps.baseEnv ?? process.env, configDir)
       })
       return 'refreshed'
     } catch {

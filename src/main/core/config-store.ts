@@ -13,7 +13,7 @@
 
 import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import { DEFAULT_POLL_INTERVAL_MS, type CollectorConfig } from '../../shared/types'
+import { DEFAULT_POLL_INTERVAL_MS, isAccountKey, type AccountKey } from '../../shared/types'
 
 // ── Sema ─────────────────────────────────────────────────────────────────────
 
@@ -30,13 +30,41 @@ export interface AppConfig {
   pollIntervalMs: number
   /** Widget'in son konumu; hic tasinmadiysa null. */
   widgetBounds: WidgetBounds | null
-  /** Cihaz envanterinde proje yollari paylasilsin mi. Varsayilan kapali (security.md Q4). */
+  /**
+   * Merkeze proje (klasor) adi gonderilsin mi. Varsayilan kapali (security.md Q4):
+   * sirket makinesinde proje adi da is bilgisidir. Kapaliyken panelde "adi gonderilmeyen".
+   */
   shareProjectPaths: boolean
   autostart: boolean
+  /**
+   * Hesaplarin Claude Code ayar klasoru. null = varsayilan: kisisel `~/.claude`,
+   * Team `~/.claude-team`.
+   */
+  accountDirs: Record<AccountKey, string | null>
+  /** Buyuk sayida ve tepside gosterilen hesap. */
+  focusAccount: AccountKey
+  /** Cihazlari birlestiren merkez. Adresler kuruluma ozel; uygulama bir yol dayatmaz. */
+  hub: HubConfig
 }
 
-/** Cok sik olcum CLI'yi bosuna yorar; cok seyrek olcum gostergeyi bayatlatir. */
-export const MIN_POLL_INTERVAL_MS = 5 * 1000
+export interface HubConfig {
+  /** Disaridan ulasilan adres (tunel, ters vekil ya da IP). null: yalniz ev agi. */
+  url: string | null
+  /** Ev agi adresi: cihaz kaydi buradan yapilir, okuma anahtarsizdir. */
+  lanUrl: string | null
+  /** Kayitla alinan cihaz anahtari. Elle yazilmaz; ev aginda ilk aciliste gelir. */
+  key: string | null
+  deviceId: string | null
+  /** Panelde gorunen cihaz adi; null = bilgisayar adi. */
+  deviceName: string | null
+}
+
+/**
+ * Kota ucu (Anthropic) sik sorulunca 429 veriyor (60 sn'de yasandi). Ayni hesabi
+ * birden cok cihaz soruyor; konfige ne yazilirsa yazilsin hesap basina 2 dakikadan
+ * sik sorulmaz. Varsayilan 5 dk (DEFAULT_POLL_INTERVAL_MS).
+ */
+export const MIN_POLL_INTERVAL_MS = 2 * 60 * 1000
 export const MAX_POLL_INTERVAL_MS = 60 * 60 * 1000
 
 /**
@@ -49,7 +77,10 @@ export function defaultConfig(): AppConfig {
     pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
     widgetBounds: null,
     shareProjectPaths: false,
-    autostart: false
+    autostart: false,
+    accountDirs: { personal: null, team: null },
+    focusAccount: 'personal',
+    hub: { url: null, lanUrl: null, key: null, deviceId: null, deviceName: null }
   }
 }
 
@@ -177,6 +208,70 @@ function readBounds(source: FieldReader): WidgetBounds | null {
   return bounds
 }
 
+function readAccountDirs(source: FieldReader): Record<AccountKey, string | null> {
+  const value = source.object['accountDirs']
+  const result: Record<AccountKey, string | null> = { personal: null, team: null }
+  if (value === undefined || value === null) return result
+  if (!isPlainObject(value)) {
+    source.issues.push('accountDirs: nesne degil, varsayilan klasorler kullanildi')
+    return result
+  }
+  for (const key of Object.keys(result) as AccountKey[]) {
+    const dir = value[key]
+    if (dir === undefined || dir === null) continue
+    if (typeof dir !== 'string' || dir.trim().length === 0) {
+      source.issues.push(`accountDirs.${key}: gecerli bir klasor degil, varsayilan kullanildi`)
+      continue
+    }
+    result[key] = dir.trim()
+  }
+  return result
+}
+
+function readFocusAccount(source: FieldReader): AccountKey {
+  const value = source.object['focusAccount']
+  if (value === undefined) return 'personal'
+  if (isAccountKey(value)) return value
+  source.issues.push('focusAccount: bilinmeyen hesap, kisisel secildi')
+  return 'personal'
+}
+
+/** http(s) adresi; sondaki egik cizgi atilir. Gecersizse null. */
+function parseHubUrl(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  const trimmed = value.trim().replace(/\/+$/, '')
+  try {
+    const url = new URL(trimmed)
+    return url.protocol === 'http:' || url.protocol === 'https:' ? trimmed : null
+  } catch {
+    return null
+  }
+}
+
+function readHub(source: FieldReader): HubConfig {
+  const result: HubConfig = { url: null, lanUrl: null, key: null, deviceId: null, deviceName: null }
+  const value = source.object['hub']
+  if (value === undefined || value === null) return result
+  if (!isPlainObject(value)) {
+    source.issues.push('hub: nesne degil, merkez kapali')
+    return result
+  }
+  for (const field of ['url', 'lanUrl'] as const) {
+    const raw = value[field]
+    if (raw === undefined || raw === null) continue
+    result[field] = parseHubUrl(raw)
+    if (result[field] === null) source.issues.push(`hub.${field}: http(s) adresi degil, yok sayildi`)
+  }
+  for (const field of ['key', 'deviceId', 'deviceName'] as const) {
+    const raw = value[field]
+    if (raw === undefined || raw === null) continue
+    if (typeof raw === 'string' && raw.trim().length > 0) result[field] = raw.trim()
+    // Anahtarin degeri asla sorun listesine yazilmaz; yalniz alan adi.
+    else source.issues.push(`hub.${field}: metin degil, yok sayildi`)
+  }
+  return result
+}
+
 /**
  * Bilinmeyen sekilli veriyi konfige cevirir. Bozuk alanlar varsayilana duser,
  * saglam alanlar korunur — tek bir hatali alan tum dosyayi atmaz.
@@ -193,7 +288,10 @@ export function normalizeConfig(value: unknown): { config: AppConfig; issues: st
       pollIntervalMs: readPollInterval(source),
       widgetBounds: readBounds(source),
       shareProjectPaths: readBoolean(source, 'shareProjectPaths', fallback.shareProjectPaths),
-      autostart: readBoolean(source, 'autostart', fallback.autostart)
+      autostart: readBoolean(source, 'autostart', fallback.autostart),
+      accountDirs: readAccountDirs(source),
+      focusAccount: readFocusAccount(source),
+      hub: readHub(source)
     },
     issues: source.issues
   }
@@ -299,15 +397,4 @@ export async function saveConfig(
       throw error
     }
   })
-}
-
-// ── Sozlesmeye kopru ─────────────────────────────────────────────────────────
-
-/** Konfigi toplayicinin bekledigi `CollectorConfig` bicimine cevirir. */
-export function toCollectorConfig(config: AppConfig, dataDir: string): CollectorConfig {
-  return {
-    pollIntervalMs: config.pollIntervalMs,
-    dataDir,
-    claudeBinPath: config.claudeBinPath
-  }
 }

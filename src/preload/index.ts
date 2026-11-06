@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-import type { StatePayload, WidgetTheme } from '../shared/types'
+import type { AccountKey, StatePayload, WidgetTheme } from '../shared/types'
 
 /**
  * Wayland pencerelerin kendi konumunu belirlemesine izin vermez:
@@ -22,6 +22,8 @@ const api = {
   dragMode,
   /** Secilen gorunumu bildirir; ana surec alt siniri ona gore ayarlar. */
   setTheme: (theme: WidgetTheme): Promise<void> => ipcRenderer.invoke('widget:theme', theme),
+  /** Buyuk sayida ve tepside gosterilecek hesabi secer; secim ana surecte saklanir. */
+  setAccount: (key: AccountKey): Promise<void> => ipcRenderer.invoke('widget:account', key),
   /**
    * Icerigin olculmus dogal boyutu. Alt sinir buradan gelir — sabit sayi degil,
    * gercekten cizilen icerik. Pencere bunun altina inemez, icerik kirpilmaz.
@@ -49,6 +51,8 @@ const api = {
   dragStart: (): void => ipcRenderer.send('widget:drag-start'),
   dragMove: (): void => ipcRenderer.send('widget:drag-move'),
   dragEnd: (): void => ipcRenderer.send('widget:drag-end'),
+  /** Ayrintili paneli acar (acik ise one getirir). */
+  openPanel: (): Promise<void> => ipcRenderer.invoke('widget:panel'),
   /** Acilista mevcut durumu ister. */
   get: (): Promise<StatePayload> => ipcRenderer.invoke('usage:get'),
   /** Kullanici "simdi yenile" dediginde. */

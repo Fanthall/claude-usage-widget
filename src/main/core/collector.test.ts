@@ -719,3 +719,44 @@ describe('createCollector — durdurma', () => {
     expect(before).toBeGreaterThan(0)
   })
 })
+
+// ── Rastgele kayma ───────────────────────────────────────────────────────────
+
+describe('olcum araligina rastgele kayma', () => {
+  function jittered(randomValue: number): Collector & { clock: FakeClock } {
+    const clock = new FakeClock()
+    const collector = createCollector(
+      {
+        now: clock.now,
+        timers: clock.timers,
+        random: () => randomValue,
+        readUsage: async () => fresh(clock.now(), 40),
+        appendSnapshot: async () => undefined
+      },
+      { dataDir: DATA_DIR, pollIntervalMs: 5 * MINUTE, jitterMs: 30_000 }
+    )
+    return Object.assign(collector, { clock })
+  }
+
+  it('bir sonraki olcum araligin ±kayma kadar etrafina planlanir', async () => {
+    for (const [random, offset] of [
+      [1, 30_000],
+      [0, -30_000],
+      [0.5, 0]
+    ] as const) {
+      const c = jittered(random)
+      c.start()
+      const state = await c.pollNow()
+      expect(state.nextAttemptAtMs).toBe(START_MS + 5 * MINUTE + offset)
+      c.stop()
+    }
+  })
+
+  it('kayma verilmezse aralik aynen kalir', async () => {
+    const h = makeHarness({ respond: async (_i, now) => fresh(now, 10) })
+    h.collector.start()
+    const state = await h.collector.pollNow()
+    expect(state.nextAttemptAtMs).toBe(START_MS + DEFAULT_POLL_INTERVAL_MS)
+    h.collector.stop()
+  })
+})

@@ -428,6 +428,26 @@ function buildTooltip(view: StatusView, presence: TrayPresence, lang: Lang): str
   return clip(percents.map((p) => `${p}%`).join(' · '), MAX_TOOLTIP_LENGTH)
 }
 
+/**
+ * Ipucuna hangi hesabin gosterildigini ve diger hesaplarin tek satirlik
+ * ozetini ekler: ilk satir secili hesabin adi, sonda digerleri.
+ *
+ * Butce asilirsa once diger hesaplarin satirlari duser; secili hesabin kendi
+ * ipucu (yuzdeler) korunur. O da sigmazsa ipucu kirpilir ama baslik kalir —
+ * hangi hesabin yuzdesi oldugu bilinmeyen bir sayi yaniltir.
+ */
+export function composeAccountTooltip(
+  tooltip: string,
+  header: string,
+  others: readonly string[]
+): string {
+  const full = [header, tooltip, ...others].join('\n')
+  if (full.length <= MAX_TOOLTIP_LENGTH) return full
+  const withoutOthers = `${header}\n${tooltip}`
+  if (withoutOthers.length <= MAX_TOOLTIP_LENGTH) return withoutOthers
+  return `${header}\n${clip(tooltip, MAX_TOOLTIP_LENGTH - header.length - 1)}`
+}
+
 // ── Baglam menusu (REQ-3 AC3) ────────────────────────────────────────────────
 
 export type TrayMenuAction = 'toggle-widget' | 'refresh' | 'open-panel' | 'quit'
