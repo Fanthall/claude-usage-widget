@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 64 64">
+  <!-- 16-32 px boyları için "Yay ölçer": karo kenarlığı ve ortadaki nokta yok (bu boyda gürültü),
+       yay daha kalın ve biraz daha büyük — tek pikselde kaybolmasın diye. -->
+  <rect x="1" y="1" width="62" height="62" rx="14" fill="#16161a"/>
+  <path d="M16.44 49.56 A22 22 0 1 1 47.56 49.56" fill="none" stroke="#33333c" stroke-width="9" stroke-linecap="round"/>
+  <path d="M16.44 49.56 A22 22 0 1 1 51.05 23" fill="none" stroke="#35c68f" stroke-width="9" stroke-linecap="round"/>
+</svg>

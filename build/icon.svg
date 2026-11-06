@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 64 64">
+  <!-- Uygulama simgesi "Yay ölçer" (kullanıcı seçimi 2026-11-06): widget'taki dolum çubuğunun
+       dairesel hâli. 270 derecelik iz, yaklaşık üçte ikisi dolu; renk widget'ın "normal" eşiği.
+       48 px ve üstü için. Küçük boylar `icon-small.svg`. -->
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="#16161a" stroke="#2a2a31" stroke-width="1"/>
+  <path d="M17.86 48.14 A20 20 0 1 1 46.14 48.14" fill="none" stroke="#2a2a31" stroke-width="6.5" stroke-linecap="round"/>
+  <path d="M17.86 48.14 A20 20 0 1 1 49.32 24" fill="none" stroke="#35c68f" stroke-width="6.5" stroke-linecap="round"/>
+  <circle cx="32" cy="34" r="3.2" fill="#f4f4f5"/>
+</svg>

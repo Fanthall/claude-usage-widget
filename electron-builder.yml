@@ -6,7 +6,7 @@
 # `infrastructure.md > Dagitim` bolumunu karsilar.
 #
 # Cikti: `dist/` (git-ignored). Ikon/arka plan gibi paketleme kaynaklari
-# `build/` altina konur; su an ikon yok, Electron varsayilani kullanilir.
+# `build/` altina konur (ikon: build/icon.svg kaynagindan icon.ico + icon.png).
 
 appId: dev.fanthal.claude-usage-widget
 productName: Claude Usage Widget
@@ -26,6 +26,9 @@ asar: true
 # ── macOS ────────────────────────────────────────────────────────────────────
 mac:
   category: public.app-category.developer-tools
+  # Uygulama simgesi; .icns derleme sirasinda bu 1024 px PNG'den uretilir.
+  # Kaynak build/icon.svg (Yay olcer). Verilmezse her yerde Electron simgesi cikar.
+  icon: build/icon.png
   target:
     - target: dmg
       # Universal yerine iki ayri arch: universal paket iki ikiliyi tek dosyada
@@ -57,6 +60,7 @@ dmg:
 
 # ── Linux ────────────────────────────────────────────────────────────────────
 linux:
+  icon: build/icon.png
   # Yalniz AppImage: varsayilan `snap`+`AppImage` ikilisi snapcraft araci ister
   # ve PRD tek dagitim bicimi istiyor.
   target:
@@ -83,6 +87,8 @@ appImage:
 
 # ── Windows ──────────────────────────────────────────────────────────────────
 win:
+  # 16-256 px her boy ayri cizili (<=32 px icon-small.svg'den); exe, kisayol ve pencere bunu kullanir.
+  icon: build/icon.ico
   target:
     - target: nsis
       arch:
@@ -95,4 +101,8 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: false
   createStartMenuShortcut: true
+  # Kurulum ve kaldirma programi da ayni simgeyi tasir; varsayilan NSIS/Electron simgesi kalmaz.
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+  installerHeaderIcon: build/icon.ico
   artifactName: ${productName}-Setup-${version}.${ext}
