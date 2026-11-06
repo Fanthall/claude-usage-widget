@@ -12,7 +12,6 @@ import {
   normalizeConfig,
   saveConfig,
   tempFilePath,
-  toCollectorConfig,
   type AppConfig,
   type ConfigFs
 } from './config-store'
@@ -92,10 +91,13 @@ describe('normalizeConfig', () => {
   it('gecerli konfigi oldugu gibi birakir', () => {
     const input: AppConfig = {
       claudeBinPath: 'C:\\bin\\claude.cmd',
-      pollIntervalMs: 30_000,
+      pollIntervalMs: 180_000,
       widgetBounds: { x: 10, y: 20, width: 300, height: 140 },
       shareProjectPaths: true,
-      autostart: true
+      autostart: true,
+      accountDirs: { personal: null, team: 'D:\\claude-is' },
+      focusAccount: "team",
+      hub: { url: "https://hub.example.test", lanUrl: "http://192.168.1.5:3310", key: "dummy-device-key", deviceId: "d1", deviceName: "PC" }
     }
     const { config, issues } = normalizeConfig(input)
     expect(config).toEqual(input)
@@ -144,6 +146,11 @@ describe('normalizeConfig', () => {
     expect(issues).toHaveLength(1)
   })
 
+  it('60 sn kota ucunu yorar: en az 2 dakikaya cekilir', () => {
+    expect(normalizeConfig({ pollIntervalMs: 60_000 }).config.pollIntervalMs).toBe(2 * 60 * 1000)
+    expect(normalizeConfig({ pollIntervalMs: 300_000 }).config.pollIntervalMs).toBe(300_000)
+  })
+
   it('pollIntervalMs ust sinira cekilir', () => {
     const { config } = normalizeConfig({ pollIntervalMs: 99 * 60 * 60 * 1000 })
     expect(config.pollIntervalMs).toBe(MAX_POLL_INTERVAL_MS)
@@ -184,6 +191,23 @@ describe('normalizeConfig', () => {
   it('shareProjectPaths acikca acilabilir', () => {
     expect(normalizeConfig({ shareProjectPaths: true }).config.shareProjectPaths).toBe(true)
   })
+
+  it('merkez varsayilan olarak kapali', () => {
+    expect(normalizeConfig({}).config.hub).toEqual({ url: null, lanUrl: null, key: null, deviceId: null, deviceName: null })
+  })
+
+  it('merkez adresi http(s) olmali, sondaki egik cizgi atilir', () => {
+    const { config, issues } = normalizeConfig({ hub: { url: 'https://hub.example.test/', lanUrl: 'ftp://x' } })
+    expect(config.hub.url).toBe('https://hub.example.test')
+    expect(config.hub.lanUrl).toBeNull()
+    expect(issues).toEqual(['hub.lanUrl: http(s) adresi degil, yok sayildi'])
+  })
+
+  it('bozuk anahtarin degeri sorun listesine yazilmaz', () => {
+    const { config, issues } = normalizeConfig({ hub: { key: 42 } })
+    expect(config.hub.key).toBeNull()
+    expect(issues).toEqual(['hub.key: metin degil, yok sayildi'])
+  })
 })
 
 // ── loadConfig ───────────────────────────────────────────────────────────────
@@ -223,10 +247,13 @@ describe('loadConfig', () => {
   it('gecerli dosyayi okur', async () => {
     const stored: AppConfig = {
       claudeBinPath: '/usr/local/bin/claude',
-      pollIntervalMs: 15_000,
+      pollIntervalMs: 240_000,
       widgetBounds: { x: 1, y: 2, width: 300, height: 100 },
       shareProjectPaths: true,
-      autostart: true
+      autostart: true,
+      accountDirs: { personal: null, team: null },
+      focusAccount: "personal",
+      hub: { url: null, lanUrl: null, key: null, deviceId: null, deviceName: null }
     }
     const fs = memoryFs({ [FILE]: JSON.stringify(stored) })
     const result = await loadConfig(FILE, { fs })
@@ -337,10 +364,13 @@ describe('gercek dosya sistemi', () => {
     const file = join(dir, 'config.json')
     const config: AppConfig = {
       claudeBinPath: null,
-      pollIntervalMs: 45_000,
+      pollIntervalMs: 360_000,
       widgetBounds: { x: 3, y: 4, width: 280, height: 120 },
       shareProjectPaths: false,
-      autostart: true
+      autostart: true,
+      accountDirs: { personal: "/home/u/.claude", team: null },
+      focusAccount: "personal",
+      hub: { url: null, lanUrl: null, key: null, deviceId: null, deviceName: null }
     }
 
     await saveConfig(file, config)
@@ -376,23 +406,6 @@ describe('gercek dosya sistemi', () => {
   })
 })
 
-// ── Sozlesmeye kopru ─────────────────────────────────────────────────────────
-
-describe('toCollectorConfig', () => {
-  it('CollectorConfig alanlarini doldurur', () => {
-    const config: AppConfig = { ...defaultConfig(), claudeBinPath: '/bin/claude' }
-    expect(toCollectorConfig(config, '/veri')).toEqual({
-      pollIntervalMs: DEFAULT_POLL_INTERVAL_MS,
-      dataDir: '/veri',
-      claudeBinPath: '/bin/claude'
-    })
-  })
-
-  it('bilinmeyen calistirilabilir null tasinir', () => {
-    expect(toCollectorConfig(defaultConfig(), '/veri').claudeBinPath).toBeNull()
-  })
-})
-
 describe('BOM iceren konfig (regresyon)', () => {
   it('BOM ile baslayan gecerli JSON okunur, varsayilana dusmez', async () => {
     const gecerli = JSON.stringify({ ...defaultConfig(), pollIntervalMs: 120_000 })
@@ -406,5 +419,46 @@ describe('BOM iceren konfig (regresyon)', () => {
     const sonuc = await loadConfig('/tmp/config.json', { fs })
     expect(sonuc.issues).toEqual([])
     expect(sonuc.config.pollIntervalMs).toBe(120_000)
+  })
+})
+
+describe('hesap ayarlari', () => {
+  it('varsayilan: iki hesap da varsayilan klasorde, odak kisisel', () => {
+    const config = defaultConfig()
+    expect(config.accountDirs).toEqual({ personal: null, team: null })
+    expect(config.focusAccount).toBe('personal')
+  })
+
+  it('eski konfig dosyasi (alanlar yok) sorunsuz okunur', () => {
+    const { config, issues } = normalizeConfig({ pollIntervalMs: 300_000 })
+    expect(config.accountDirs).toEqual({ personal: null, team: null })
+    expect(config.focusAccount).toBe('personal')
+    expect(issues).toEqual([])
+  })
+
+  it('gecerli klasor ve odak korunur, bosluklar kirpilir', () => {
+    const { config, issues } = normalizeConfig({
+      accountDirs: { team: '  D:\\claude-is  ' },
+      focusAccount: 'team'
+    })
+    expect(config.accountDirs).toEqual({ personal: null, team: 'D:\\claude-is' })
+    expect(config.focusAccount).toBe('team')
+    expect(issues).toEqual([])
+  })
+
+  it('bozuk alanlar varsayilana duser ve nedeni yazilir', () => {
+    const { config, issues } = normalizeConfig({
+      accountDirs: { personal: 42, team: '' },
+      focusAccount: 'is'
+    })
+    expect(config.accountDirs).toEqual({ personal: null, team: null })
+    expect(config.focusAccount).toBe('personal')
+    expect(issues).toHaveLength(3)
+  })
+
+  it('accountDirs nesne degilse tum klasorler varsayilan', () => {
+    const { config, issues } = normalizeConfig({ accountDirs: 'D:\\x' })
+    expect(config.accountDirs).toEqual({ personal: null, team: null })
+    expect(issues).toHaveLength(1)
   })
 })

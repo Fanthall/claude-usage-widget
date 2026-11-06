@@ -1,13 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-import {
-  CREDENTIALS_FILE_NAME,
-  claudeCredentialsFile,
-  readAccessToken,
-  readAccountIdentity
-} from './identity'
+import { claudeCredentialsFile, readAccessToken, readAccountIdentity } from './identity'
 import { resetLogSink, setLogSink, type LogRecord } from './log-safe'
-import type { PathEnv, PathFs } from './paths'
+import { CREDENTIALS_FILE_NAME, type PathEnv, type PathFs } from './paths'
 
 // ── Sabitler ve sahte ortam ──────────────────────────────────────────────────
 

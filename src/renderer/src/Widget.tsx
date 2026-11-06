@@ -1,15 +1,28 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { drawTrayIcon } from './tray-icon'
 import { shownData, FRESHNESS_NOTICE_MS, type NoticeTone } from './status-text'
-import { LuAlignLeft, LuCircleDot, LuMinus, LuRefreshCw, LuX } from 'react-icons/lu'
+import { LuAlignLeft, LuChartColumn, LuCircleDot, LuMinus, LuRefreshCw, LuX } from 'react-icons/lu'
 import type { IconType } from 'react-icons'
 
-import { FALLBACK_LANG, formatDuration, t, type Lang, type MessageKey } from '@shared/i18n'
+import {
+  FALLBACK_LANG,
+  formatDuration,
+  formatPercent,
+  formatTokens,
+  PERCENT_SIGN_FIRST,
+  t,
+  type Lang,
+  type MessageKey
+} from '@shared/i18n'
 import {
   isWidgetTheme,
   WIDGET_THEMES,
+  type AccountKey,
+  type AccountPayload,
+  type AccountTokens,
   type CliErrorKind,
   type StatePayload,
+  type TokenState,
   type UsageStatus,
   type UsageWindow,
   type WidgetTheme
@@ -45,6 +58,18 @@ const MAX_FIT_WIDTH = 420
 
 const LEVEL_COLOR = { normal: '#35c68f', caution: '#e0a33a', critical: '#e5544f' } as const
 type Level = keyof typeof LEVEL_COLOR
+
+/**
+ * Hesabin kimlik rengi; panelin grafikleriyle ayni (kisisel mavi, Team turuncu;
+ * renk korlugu denetiminden gecti). Yalniz kucuk isarette kullanilir ve hep
+ * hesabin adiyla birlikte durur — esik renkleriyle karismaz, tek basina bilgi
+ * tasimaz.
+ */
+const ACCOUNT_COLOR: Record<AccountKey, string> = { personal: '#3987e5', team: '#d95926' }
+const ACCOUNT_LABEL: Record<AccountKey, MessageKey> = {
+  personal: 'account.personal',
+  team: 'account.team'
+}
 
 function levelFor(percent: number): Level {
   if (percent >= 90) return 'critical'
@@ -154,6 +179,33 @@ function Bar({
   )
 }
 
+/**
+ * Sayı ve yüzde işareti, işaret ayrı boyutta. Sıra dile göre: Türkçede işaret
+ * önde (%65), İngilizcede sonda (65%).
+ */
+function SignedPercent({
+  lang,
+  value,
+  signClass
+}: {
+  lang: Lang
+  value: number
+  signClass: string
+}): React.ReactElement {
+  const sign = <span className={signClass}>%</span>
+  return PERCENT_SIGN_FIRST[lang] ? (
+    <>
+      {sign}
+      {value}
+    </>
+  ) : (
+    <>
+      {value}
+      {sign}
+    </>
+  )
+}
+
 /** Sıfırlanma zamanı + kalan süre — çıktının gerçekten verdiği tek zaman bilgisi. */
 function resetText(lang: Lang, w: UsageWindow, now: number): string {
   if (w.resetsAtMs === null) return '—'
@@ -175,25 +227,24 @@ function FocusView({
 }): React.ReactElement {
   const main = primaryWindow(windows)
   if (main === null) {
-    return <div className="text-[11px] text-[#6b6b74]">{t(lang, 'state.noData')}</div>
+    return <div className="text-[11px] text-[#8b8b94]">{t(lang, 'state.noData')}</div>
   }
   const rest = windows.filter((w) => w.label !== main.label)
   const left = timeLeft(lang, main.resetsAtMs, now)
 
   return (
     <div className="w-max min-w-[184px]">
-      <div className="text-[10px] tracking-[0.09em] text-[#6b6b74] uppercase">
+      <div className="text-[10px] tracking-[0.09em] text-[#8b8b94] uppercase">
         {shortLabel(lang, main.label)}
       </div>
 
       <div className="mt-[7px] mb-[9px] text-[40px] leading-none font-semibold tracking-[-0.02em] tabular-nums">
-        {main.percent}
-        <span className="ml-px text-[17px] font-medium text-[#a1a1aa]">%</span>
+        <SignedPercent lang={lang} value={main.percent} signClass="mx-px text-[17px] font-medium text-[#a1a1aa]" />
       </div>
 
       <Bar percent={main.percent} motion={motion} />
 
-      <div className="mt-2 text-[10.5px] tabular-nums text-[#6b6b74]">
+      <div className="mt-2 text-[10.5px] tabular-nums text-[#8b8b94]">
         {main.resetsAtMs === null
           ? t(lang, 'reset.unknown')
           : `${t(lang, 'reset.at', { time: clock(lang, main.resetsAtMs) })}${
@@ -205,17 +256,16 @@ function FocusView({
         <div className="mt-3 flex gap-[14px] border-t border-[#1e1e23] pt-[10px]">
           {rest.map((w) => (
             <div key={w.label} className="flex flex-col gap-[3px]">
-              <span className="text-[9.5px] tracking-[0.07em] text-[#6b6b74] uppercase">
+              <span className="text-[9.5px] tracking-[0.07em] text-[#8b8b94] uppercase">
                 {shortLabel(lang, w.label)}
               </span>
               <span
                 className="text-[13px] font-semibold tabular-nums"
                 style={{ color: w.percent === 0 ? '#a1a1aa' : undefined }}
               >
-                {w.percent}
-                <span className="text-[10px] font-normal text-[#6b6b74]">%</span>
+                <SignedPercent lang={lang} value={w.percent} signClass="text-[10px] font-normal text-[#8b8b94]" />
               </span>
-              <span className="text-[9.5px] whitespace-nowrap tabular-nums text-[#6b6b74]">
+              <span className="text-[9.5px] whitespace-nowrap tabular-nums text-[#8b8b94]">
                 {timeLeft(lang, w.resetsAtMs, now, true) ?? '—'}
               </span>
             </div>
@@ -255,13 +305,13 @@ function ListView({
             className="text-right text-[13.5px] font-semibold tabular-nums"
             style={{ color: w.percent === 0 ? '#a1a1aa' : undefined }}
           >
-            {w.percent}%
+            {formatPercent(lang, w.percent)}
           </div>
           <div className="col-span-2 flex items-center gap-2">
             <span className="min-w-[70px] flex-1">
               <Bar percent={w.percent} motion={motion} muted={w.percent === 0} />
             </span>
-            <span className="text-[9.5px] whitespace-nowrap tabular-nums text-[#6b6b74]">
+            <span className="text-[9.5px] whitespace-nowrap tabular-nums text-[#8b8b94]">
               {resetText(lang, w, now)}
             </span>
           </div>
@@ -295,16 +345,325 @@ function StripView({
             className="min-w-[34px] text-[15px] font-semibold tabular-nums"
             style={{ color: w.percent === 0 ? '#a1a1aa' : undefined }}
           >
-            {w.percent}%
+            {formatPercent(lang, w.percent)}
           </span>
           <span className="flex-1 text-[10px] whitespace-nowrap text-[#a1a1aa]">
             {shortLabel(lang, w.label)}
           </span>
-          <span className="text-[9.5px] whitespace-nowrap tabular-nums text-[#6b6b74]">
+          <span className="text-[9.5px] whitespace-nowrap tabular-nums text-[#8b8b94]">
             {resetText(lang, w, now)}
           </span>
         </div>
       ))}
+    </div>
+  )
+}
+
+// ── Hesaplar ─────────────────────────────────────────────────────────────────
+
+function AccountMark({ account, dim = false }: { account: AccountKey; dim?: boolean }): React.ReactElement {
+  return (
+    <span
+      aria-hidden
+      className="h-[7px] w-[7px] shrink-0 rounded-[2px]"
+      style={{ background: ACCOUNT_COLOR[account], opacity: dim ? 0.45 : 1 }}
+    />
+  )
+}
+
+/** Odak görünümünde büyük sayının hangi hesaba ait olduğunu seçtiren sekmeler. */
+function AccountTabs({
+  lang,
+  accounts,
+  focus,
+  onSelect
+}: {
+  lang: Lang
+  accounts: AccountPayload[]
+  focus: AccountKey
+  onSelect: (key: AccountKey) => void
+}): React.ReactElement {
+  return (
+    <div
+      role="group"
+      aria-label={t(lang, 'account.group')}
+      className="mb-[9px] flex w-max gap-[3px]"
+      style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+    >
+      {accounts.map((a) => {
+        const active = a.key === focus
+        const name = t(lang, ACCOUNT_LABEL[a.key])
+        return (
+          <button
+            key={a.key}
+            type="button"
+            aria-pressed={active}
+            title={t(lang, 'account.show', { account: name })}
+            onClick={() => onSelect(a.key)}
+            className={`flex items-center gap-[5px] rounded-[5px] px-[7px] py-[2px] text-[10.5px] transition-colors ${
+              active ? 'bg-[#26262e] text-[#f4f4f5]' : 'text-[#a1a1aa] hover:bg-[#1f1f25]'
+            }`}
+          >
+            <AccountMark account={a.key} dim={a.presence === 'not-connected'} />
+            {name}
+          </button>
+        )
+      })}
+    </div>
+  )
+}
+
+/** Bu cihazda girişi olmayan hesap. Hata değildir; nasıl bağlanacağı yazar. */
+function NotConnected({ lang, hint }: { lang: Lang; hint: boolean }): React.ReactElement {
+  return (
+    <div className="flex flex-col gap-[3px] py-[3px]">
+      <span className="text-[11px] text-[#a1a1aa]">{t(lang, 'account.notConnected')}</span>
+      {hint ? (
+        <span className="max-w-[190px] text-[9.5px] leading-snug text-[#8b8b94]">
+          {t(lang, 'account.connectHint')}
+        </span>
+      ) : null}
+    </div>
+  )
+}
+
+/** Özet satırı için oturum ve tüm modellerin haftası; ikisi yoksa ilk iki pencere. */
+function summaryWindows(windows: UsageWindow[]): UsageWindow[] {
+  const session = windows.find((w) => /session/i.test(w.label))
+  const week = windows.find((w) => /week/i.test(w.label) && /all/i.test(w.label))
+  const picked = [session, week].filter((w): w is UsageWindow => w !== undefined)
+  return picked.length > 0 ? picked : windows.slice(0, 2)
+}
+
+/** Odak görünümünün altında öteki hesap: tek satır. */
+function OtherAccountRow({
+  lang,
+  account,
+  now
+}: {
+  lang: Lang
+  account: AccountPayload
+  now: number
+}): React.ReactElement {
+  let detail: string
+  if (account.presence === 'not-connected') {
+    detail = t(lang, 'account.notConnected')
+  } else if (account.presence === 'checking') {
+    detail = t(lang, 'state.measuring')
+  } else {
+    const { windows, at, fresh } = shownData(account.status)
+    if (windows.length === 0) {
+      detail =
+        account.status.kind === 'error'
+          ? errorMessage(lang, account.status.errorKind).text
+          : t(lang, 'state.measuring')
+    } else {
+      detail = summaryWindows(windows)
+        .map((w) => `${shortLabel(lang, w.label)} ${formatPercent(lang, w.percent)}`)
+        .join(' · ')
+      // Eski değer güncel gibi durmasın; bayatlığı metin söyler.
+      if (!fresh && at !== null) {
+        detail += ` · ${t(lang, 'state.stale', { age: ageAmount(lang, Math.max(0, now - at)) })}`
+      }
+    }
+  }
+  return (
+    <div className="mt-3 flex items-center gap-[6px] border-t border-[#1e1e23] pt-[9px] text-[10.5px] whitespace-nowrap tabular-nums text-[#a1a1aa]">
+      <AccountMark account={account.key} dim={account.presence === 'not-connected'} />
+      <span className="text-[#f4f4f5]">{t(lang, ACCOUNT_LABEL[account.key])}</span>
+      <span>{detail}</span>
+    </div>
+  )
+}
+
+/** Bir hesabın değerleri: tazelik satırı + seçili görünüm. Odak ve liste için. */
+function AccountValues({
+  lang,
+  account,
+  view,
+  now,
+  motion
+}: {
+  lang: Lang
+  account: AccountPayload
+  view: 'focus' | 'list'
+  now: number
+  motion: boolean
+}): React.ReactElement {
+  if (account.presence === 'not-connected') return <NotConnected lang={lang} hint />
+  const { windows, fresh } = shownData(account.status)
+  return (
+    <>
+      <DataAge lang={lang} status={account.status} now={now} />
+      {/* Soluklaştırma yalnızca DEĞERLERE uygulanır — tazelik satırı tam
+          opak kalsın diye. Eski değeri asıl anlatan üstteki bayatlık satırıdır. */}
+      <div className={fresh ? '' : 'opacity-60'}>
+        {windows.length === 0 ? (
+          <div className="text-[11px] text-[#a1a1aa]">
+            {t(lang, account.status.kind === 'loading' ? 'state.firstMeasure' : 'state.noData')}
+          </div>
+        ) : view === 'focus' ? (
+          <FocusView lang={lang} windows={windows} now={now} motion={motion} />
+        ) : (
+          <ListView lang={lang} windows={windows} now={now} motion={motion} />
+        )}
+      </div>
+    </>
+  )
+}
+
+/** İki hesap bağlıyken şerit: her hesap tek satır, yalnız oturum penceresi. */
+function StripAccounts({
+  lang,
+  accounts,
+  now,
+  tokens
+}: {
+  lang: Lang
+  accounts: AccountPayload[]
+  now: number
+  tokens: TokenState | null
+}): React.ReactElement {
+  return (
+    <div className="w-max space-y-[7px]">
+      {accounts.map((a) => {
+        const { windows, at, fresh } = shownData(a.status)
+        const main = primaryWindow(windows)
+        const right =
+          main === null
+            ? ''
+            : !fresh && at !== null
+              ? t(lang, 'state.stale', { age: ageAmount(lang, Math.max(0, now - at)) })
+              : resetText(lang, main, now)
+        return (
+          <div key={a.key} className="flex items-baseline gap-[7px]">
+            <span
+              className="h-1.5 w-1.5 shrink-0 -translate-y-px rounded-full"
+              style={{ background: main === null || !fresh ? '#3a3a44' : LEVEL_COLOR[levelFor(main.percent)] }}
+              aria-hidden
+            />
+            <span
+              className={`min-w-[38px] text-[15px] font-semibold tabular-nums ${fresh ? '' : 'text-[#8b8b94]'}`}
+            >
+              {main === null ? '—' : formatPercent(lang, main.percent)}
+            </span>
+            <span className="flex flex-1 items-center gap-[5px] text-[10px] whitespace-nowrap text-[#a1a1aa]">
+              <AccountMark account={a.key} />
+              {t(lang, ACCOUNT_LABEL[a.key])}
+            </span>
+            <span
+              className={`text-[9.5px] whitespace-nowrap tabular-nums ${fresh ? 'text-[#8b8b94]' : 'text-[#e0a33a]'}`}
+            >
+              {right}
+            </span>
+            {tokens === null || tokens.error !== null || tokensOf(tokens, a.key) === null ? null : (
+              <span className="text-[9.5px] whitespace-nowrap tabular-nums text-[#8b8b94]">
+                {t(lang, 'tokens.per15', { value: formatTokens(lang, tokensOf(tokens, a.key)?.last15m ?? 0) })}
+              </span>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Token ────────────────────────────────────────────────────────────────────
+
+function tokensOf(state: TokenState | null, key: AccountKey): AccountTokens | null {
+  return state?.accounts.find((a) => a.key === key) ?? null
+}
+
+/** Geçmiş taraması sürüyorsa yüzdesi; yoksa null. */
+function scanPercent(state: TokenState | null): number | null {
+  const p = state?.progress
+  if (p === null || p === undefined || p.phase !== 'initial' || p.totalBytes === 0) return null
+  return Math.min(99, Math.floor((p.doneBytes / p.totalBytes) * 100))
+}
+
+/** Son 3 saatin 5 dakikalık dilimleri; eksen yok, yalnız biçim. */
+function Spark({ values, color }: { values: number[]; color: string }): React.ReactElement {
+  const w = 184
+  const h = 24
+  const max = Math.max(1, ...values)
+  const step = values.length > 1 ? w / (values.length - 1) : w
+  const points = values.map((v, i) => `${(i * step).toFixed(1)},${(h - 1 - (v / max) * (h - 2)).toFixed(1)}`).join(' ')
+  return (
+    <svg aria-hidden width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="block">
+      <polyline points={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+/** Odak görünümünde seçili hesabın token bloğu. */
+function TokenBlock({
+  lang,
+  account,
+  state
+}: {
+  lang: Lang
+  account: AccountKey
+  state: TokenState | null
+}): React.ReactElement | null {
+  if (state === null) return null
+  const tokens = tokensOf(state, account)
+  const pct = scanPercent(state)
+  const bad = state.progress?.badLines ?? 0
+  return (
+    <div className="mt-3 flex w-[184px] flex-col gap-[4px] border-t border-[#1e1e23] pt-[10px] tabular-nums">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[9.5px] tracking-[0.07em] text-[#8b8b94] uppercase">{t(lang, 'tokens.last15')}</span>
+        {tokens === null ? null : (
+          <span className="text-[9.5px] whitespace-nowrap text-[#8b8b94]">
+            {t(lang, 'tokens.today', { value: formatTokens(lang, tokens.today) })}
+          </span>
+        )}
+      </div>
+      {state.error !== null ? (
+        <span className="text-[10.5px] text-[#a1a1aa]">{t(lang, 'tokens.unavailable')}</span>
+      ) : tokens === null ? null : (
+        <>
+          <span className="text-[15px] font-semibold">{formatTokens(lang, tokens.last15m)}</span>
+          <Spark values={tokens.spark} color={ACCOUNT_COLOR[account]} />
+          {tokens.cacheRead15m > 0 ? (
+            <span className="text-[9.5px] text-[#8b8b94]">
+              {t(lang, 'tokens.cacheRead', { value: formatTokens(lang, tokens.cacheRead15m) })}
+            </span>
+          ) : null}
+        </>
+      )}
+      {pct === null ? null : (
+        <span className="text-[9.5px] text-[#a1a1aa]">
+          {t(lang, 'tokens.scanning', { pct: formatPercent(lang, pct) })}
+        </span>
+      )}
+      {bad > 0 ? (
+        <span className="text-[9.5px] text-[#e0a33a]">{t(lang, 'tokens.badLines', { count: bad })}</span>
+      ) : null}
+    </div>
+  )
+}
+
+/** Liste görünümünde bir hesabın altında tek satır token özeti. */
+function TokenLine({
+  lang,
+  account,
+  state
+}: {
+  lang: Lang
+  account: AccountKey
+  state: TokenState | null
+}): React.ReactElement | null {
+  const tokens = tokensOf(state, account)
+  if (state === null || state.error !== null || tokens === null) return null
+  return (
+    <div className="flex justify-between gap-3 pt-[5px] text-[10px] whitespace-nowrap tabular-nums text-[#8b8b94]">
+      <span>{t(lang, 'tokens.last15')}</span>
+      <span>
+        <span className="text-[#f4f4f5]">{formatTokens(lang, tokens.last15m)}</span>
+        {' · '}
+        {t(lang, 'tokens.today', { value: formatTokens(lang, tokens.today) })}
+      </span>
     </div>
   )
 }
@@ -330,8 +689,8 @@ function IconButton({
   const tone = active
     ? 'bg-[#26262e] text-[#f4f4f5]'
     : danger
-      ? 'text-[#6b6b74] hover:bg-[#3a1f21] hover:text-[#e5544f]'
-      : 'text-[#6b6b74] hover:bg-[#1f1f25] hover:text-[#a1a1aa]'
+      ? 'text-[#8b8b94] hover:bg-[#3a1f21] hover:text-[#e5544f]'
+      : 'text-[#8b8b94] hover:bg-[#1f1f25] hover:text-[#a1a1aa]'
   return (
     <button
       type="button"
@@ -382,6 +741,7 @@ function Toolbar({
         />
       ))}
       <span className="mx-[3px] h-3 w-px bg-[#26262c]" aria-hidden />
+      <IconButton icon={LuChartColumn} label={t(lang, 'tray.panel')} onClick={() => void window.usageApi.openPanel()} />
       <IconButton
         icon={LuRefreshCw}
         label={t(lang, refreshing ? 'action.measuring' : 'action.measureNow')}
@@ -450,9 +810,8 @@ function DataAge({
     ? t(lang, 'measured.ago', { age: amount })
     : t(lang, 'state.stale', { age: amount })
 
-  // Renk: ikincil metin tonu (#6b6b74) bu satır için fazla sessiz — 9,5 px'te
-  // zemine karşı ~3,4:1 kontrast veriyor ve tam da fark edilmesi gereken bilgi
-  // gözden kaçıyor. #a1a1aa ~7:1 ile okunur, sayının önüne de geçmez.
+  // Renk: bu satır soluk metin tonundan (#8b8b94, ~5,3:1) bir kademe parlak
+  // (#a1a1aa, ~7:1): fark edilmesi gereken bilgi, ama sayının önüne geçmez.
   return (
     <div
       className={`mb-[7px] flex items-center gap-[5px] text-[9.5px] tabular-nums ${
@@ -631,10 +990,14 @@ export function Widget(): React.ReactElement {
   // zaten `setTitle` ile yaziyor. Ikona da cizersek ayni sayi menu cubugunda
   // yan yana IKI KEZ gorunur. Ikonu gondermeyince ana surec de canvas moduna
   // gecmez, sade ikon + metin kalir.
+  //
+  // Ikon secili hesabin durumunu cizer; ana surecin ipucu da o hesabi anlatir.
   useEffect(() => {
     if (payload === null) return
     if (window.usageApi.platform === 'darwin') return
-    const dataUrl = drawTrayIcon(payload.status)
+    const focused = payload.accounts.find((a) => a.key === payload.focus)
+    if (focused === undefined) return
+    const dataUrl = drawTrayIcon(focused.status)
     if (dataUrl !== null) window.usageApi.setTrayIcon(dataUrl)
   }, [payload])
 
@@ -650,6 +1013,11 @@ export function Widget(): React.ReactElement {
     } catch {
       // Kalıcı yazılamazsa seçim yalnız bu oturumda geçerli olur.
     }
+  }
+
+  function selectAccount(key: AccountKey): void {
+    // Secim ana surecte saklanir (tepsi de onu gosterir); yeni durum yayinla gelir.
+    void window.usageApi.setAccount(key)
   }
 
   function refresh(): void {
@@ -697,8 +1065,73 @@ export function Widget(): React.ReactElement {
     document.documentElement.lang = lang
   }, [lang])
 
-  const status: UsageStatus = payload?.status ?? { kind: 'loading' }
-  const { windows, fresh } = shownData(status)
+  const accounts = payload?.accounts ?? []
+  const focused = accounts.find((a) => a.key === payload?.focus) ?? accounts[0] ?? null
+  const others = accounts.filter((a) => a !== focused)
+  const connected = accounts.filter((a) => a.presence === 'connected')
+  // Alt satirdaki durum metni secili hesabi anlatir.
+  const status: UsageStatus = focused?.status ?? { kind: 'loading' }
+
+  function body(): React.ReactElement {
+    if (focused === null) {
+      return <div className="text-[11px] text-[#a1a1aa]">{t(lang, 'state.firstMeasure')}</div>
+    }
+
+    if (theme === 'focus') {
+      return (
+        <>
+          {accounts.length > 1 ? (
+            <AccountTabs lang={lang} accounts={accounts} focus={focused.key} onSelect={selectAccount} />
+          ) : null}
+          <AccountValues lang={lang} account={focused} view="focus" now={now} motion={motion} />
+          <TokenBlock lang={lang} account={focused.key} state={payload?.tokens ?? null} />
+          {others.map((a) => (
+            <OtherAccountRow key={a.key} lang={lang} account={a} now={now} />
+          ))}
+        </>
+      )
+    }
+
+    if (theme === 'list') {
+      return (
+        <>
+          {accounts.map((a, i) => (
+            <div key={a.key} className={i === 0 ? '' : 'mt-[6px] border-t border-[#1e1e23] pt-[9px]'}>
+              <div className="mb-[2px] flex items-center gap-[6px] text-[11px] font-semibold">
+                <AccountMark account={a.key} dim={a.presence === 'not-connected'} />
+                {t(lang, ACCOUNT_LABEL[a.key])}
+              </div>
+              <AccountValues lang={lang} account={a} view="list" now={now} motion={motion} />
+              <TokenLine lang={lang} account={a.key} state={payload?.tokens ?? null} />
+            </div>
+          ))}
+        </>
+      )
+    }
+
+    // Serit en kucuk yuzey: iki hesap bagliyken her hesap tek satir. Tek hesap
+    // bagliyken bugunku gibi o hesabin butun pencereleri; bagli olmayan hesap
+    // seritte yer kaplamaz.
+    if (connected.length > 1) {
+      return <StripAccounts lang={lang} accounts={connected} now={now} tokens={payload?.tokens ?? null} />
+    }
+    const single = connected[0] ?? focused
+    const { windows, fresh } = shownData(single.status)
+    return (
+      <>
+        <DataAge lang={lang} status={single.status} now={now} />
+        <div className={fresh ? '' : 'opacity-60'}>
+          {windows.length === 0 ? (
+            <div className="text-[11px] text-[#a1a1aa]">
+              {t(lang, single.status.kind === 'loading' ? 'state.firstMeasure' : 'state.noData')}
+            </div>
+          ) : (
+            <StripView lang={lang} windows={windows} now={now} />
+          )}
+        </div>
+      </>
+    )
+  }
 
   return (
     <div
@@ -720,30 +1153,18 @@ export function Widget(): React.ReactElement {
       <div className="min-h-0 flex-1 overflow-y-auto" style={{ marginTop: TOOLBAR_GAP }}>
         {/* Ölçüm bu kutudan alınır; `w-max` şart. */}
         <div ref={bodyRef} className="w-max">
-          <DataAge lang={lang} status={status} now={now} />
-          {/* Soluklaştırma yalnızca DEĞERLERE uygulanır — tazelik satırı tam
-              opak kalsın diye. Renk zaten tek başına yeterli değil; eski değeri
-              asıl anlatan, üstteki bayatlık satırıdır. */}
-          <div className={fresh ? '' : 'opacity-60'}>
-            {windows.length === 0 ? (
-              <div className="text-[11px] text-[#a1a1aa]">
-                {t(lang, status.kind === 'loading' ? 'state.firstMeasure' : 'state.noData')}
-              </div>
-            ) : theme === 'focus' ? (
-              <FocusView lang={lang} windows={windows} now={now} motion={motion} />
-            ) : theme === 'list' ? (
-              <ListView lang={lang} windows={windows} now={now} motion={motion} />
-            ) : (
-              <StripView lang={lang} windows={windows} now={now} />
-            )}
-          </div>
+          {body()}
         </div>
       </div>
 
       {/* Boşluk StatusLine'ın kendi içinde; metin gerekmiyorsa hiç çizilmez ve
           hayalet boşluk oluşmaz. */}
       <div ref={statusRef} className="shrink-0">
-        <StatusLine lang={lang} status={status} streak={payload?.errorStreak ?? 0} />
+        {/* Bagli olmayan hesabin "olcum yok"u hata gibi alt satira yazilmaz;
+            ne yapilacagi govdede duruyor. */}
+        {focused?.presence === 'not-connected' ? null : (
+          <StatusLine lang={lang} status={status} streak={focused?.errorStreak ?? 0} />
+        )}
       </div>
     </div>
   )

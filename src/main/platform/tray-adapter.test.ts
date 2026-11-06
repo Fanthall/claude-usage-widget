@@ -5,6 +5,7 @@ import {
   CAUTION_PERCENT,
   CRITICAL_PERCENT,
   MAX_TOOLTIP_LENGTH,
+  composeAccountTooltip,
   MIN_TEXT_ICON_SIZE,
   applyIndicator,
   buildTrayMenuTemplate,
@@ -1379,5 +1380,28 @@ describe('renderTrayImage', () => {
     renderTrayImage(spec, factory, trayImageStyleFor('win32'))
 
     expect(image.setTemplateImage).not.toHaveBeenCalled()
+  })
+})
+
+describe('composeAccountTooltip', () => {
+  const tip = 'Current session: 65%\nCurrent week (all models): 28%'
+
+  it('ilk satir secili hesap, sonda diger hesaplar', () => {
+    expect(composeAccountTooltip(tip, 'Kişisel', ['Team: bağlı değil'])).toBe(
+      `Kişisel\n${tip}\nTeam: bağlı değil`
+    )
+  })
+
+  it('butce asilinca once diger hesaplarin satiri duser', () => {
+    const long = 'x'.repeat(MAX_TOOLTIP_LENGTH - 'Kişisel'.length - 1)
+    const out = composeAccountTooltip(long, 'Kişisel', ['Team: %46'])
+    expect(out).toBe(`Kişisel\n${long}`)
+    expect(out.length).toBeLessThanOrEqual(MAX_TOOLTIP_LENGTH)
+  })
+
+  it('ipucu tek basina sigmazsa kirpilir ama baslik kalir', () => {
+    const out = composeAccountTooltip('y'.repeat(200), 'Team', [])
+    expect(out.startsWith('Team\n')).toBe(true)
+    expect(out.length).toBeLessThanOrEqual(MAX_TOOLTIP_LENGTH)
   })
 })

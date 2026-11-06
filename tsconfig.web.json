@@ -15,5 +15,5 @@
     "noEmit": true,
     "paths": { "@renderer/*": ["./src/renderer/src/*"], "@shared/*": ["./src/shared/*"] }
   },
-  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/shared/**/*.ts"]
+  "include": ["src/renderer/**/*.ts", "src/renderer/**/*.tsx", "src/panel/**/*.ts", "src/panel/**/*.tsx", "src/shared/**/*.ts"]
 }

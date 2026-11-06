@@ -12,7 +12,7 @@
 import { readFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { posix, win32 } from 'node:path'
-import type { SupportedPlatform } from '../../shared/types'
+import type { AccountKey, SupportedPlatform } from '../../shared/types'
 
 /** Uygulamanin kendi verisi bu ad altinda toplanir. */
 export const APP_DIR_NAME = 'claude-usage-widget'
@@ -25,6 +25,12 @@ export const CLAUDE_DIR_NAME = '.claude'
 
 /** machineID ve hesap bilgisini tutan dosyanin adi. */
 export const CLAUDE_CONFIG_FILE_NAME = '.claude.json'
+
+/** CLI'in OAuth jetonunu tuttugu dosyanin adi (ayar klasorunun altinda). */
+export const CREDENTIALS_FILE_NAME = '.credentials.json'
+
+/** Team hesabinin varsayilan ayar klasoru; `CLAUDE_CONFIG_DIR` ile kullanilir. */
+export const TEAM_CLAUDE_DIR_NAME = '.claude-team'
 
 // ── Enjekte edilebilir ortam ─────────────────────────────────────────────────
 
@@ -76,6 +82,63 @@ export function claudeHomeDir(env: PathEnv = nodePathEnv()): string {
 /** `~/.claude.json` — `machineID` ve `oauthAccount` burada durur. */
 export function claudeConfigFile(env: PathEnv = nodePathEnv()): string {
   return joinerFor(env.platform)(env.homeDir, CLAUDE_CONFIG_FILE_NAME)
+}
+
+// ── Hesap basina yollar ──────────────────────────────────────────────────────
+
+/** Bir hesabin Claude Code dosyalari. */
+export interface AccountPaths {
+  /** Claude Code ayar klasoru. */
+  configDir: string
+  /** Hesap kaydi: `oauthAccount`, `cachedUsageUtilization`. */
+  accountFile: string
+  /** Jeton dosyasi (Windows/Linux). macOS'ta jeton Anahtar Zinciri'nde durur. */
+  credentialsFile: string
+  /** Oturum kayitlari. */
+  projectsDir: string
+  /**
+   * CLI bu hesap icin calistirilirken verilecek `CLAUDE_CONFIG_DIR`.
+   * Varsayilan klasorde null: degisken hic verilmez.
+   */
+  cliConfigDir: string | null
+}
+
+/** Ayni klasor mu. Windows'ta buyuk/kucuk harf ve sondaki ayrac fark etmez. */
+function samePath(a: string, b: string, platform: SupportedPlatform): boolean {
+  const norm = (p: string): string => {
+    const trimmed = p.replace(/[\\/]+$/, '')
+    return platform === 'win32' ? trimmed.replace(/\//g, '\\').toLowerCase() : trimmed
+  }
+  return norm(a) === norm(b)
+}
+
+/**
+ * Hesabin dosya yollari.
+ *
+ * Kisisel hesap ortamdaki `CLAUDE_CONFIG_DIR`'i **okumaz**: widget bir Team
+ * oturumundan baslatilmissa o degisken Team klasorunu gosterir ve kisisel
+ * satir Team'in kotasini yazardi. Klasor yalniz ayardan (`override`) degisir.
+ *
+ * Hesap kaydinin yeri klasore baglidir: varsayilan klasorde `~/.claude.json`
+ * (ev dizininde), `CLAUDE_CONFIG_DIR` verildiginde klasorun icinde
+ * `.claude.json` (olculdu 2026-11-06, Claude Code 2.1.177).
+ */
+export function accountPaths(
+  key: AccountKey,
+  override: string | null = null,
+  env: PathEnv = nodePathEnv()
+): AccountPaths {
+  const join = joinerFor(env.platform)
+  const defaultDir = claudeHomeDir(env)
+  const dir = override ?? (key === 'personal' ? defaultDir : join(env.homeDir, TEAM_CLAUDE_DIR_NAME))
+  const isDefault = samePath(dir, defaultDir, env.platform)
+  return {
+    configDir: dir,
+    accountFile: isDefault ? claudeConfigFile(env) : join(dir, CLAUDE_CONFIG_FILE_NAME),
+    credentialsFile: join(dir, CREDENTIALS_FILE_NAME),
+    projectsDir: join(dir, 'projects'),
+    cliConfigDir: isDefault ? null : dir
+  }
 }
 
 // ── Uygulamanin kendi veri dizini ────────────────────────────────────────────

@@ -1,0 +1,32 @@
+# Merkez (hub). Widget'in kendisi Electron uygulamasidir; bu dosya yalniz merkezi calistirir.
+#
+# Iki dinleyici:
+#   8080  disariya acilacak uc. Her istek cihaz anahtari ister. Disariya nasil acilacagi
+#         kurulumdan kuruluma degisir (tunel, ters vekil, port yonlendirme); bu dosya
+#         bir yol dayatmaz, yalniz yerelde yayinlar.
+#   8081  ev agi ucu: panel sayfasi, anahtarsiz okuma, cihaz kaydi. Disariya ACILMAZ.
+#
+# Makineye ozel ekler (tunel konteyneri, bu makinenin Claude klasorunu salt okunur baglamak)
+# ayri bir override dosyasinda durur: docker compose -f docker-compose.yml -f <override> up -d
+name: usage
+services:
+  hub:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: claude-usage-hub:latest
+    container_name: usage-hub
+    restart: unless-stopped
+    volumes:
+      # SQLite WAL, Windows klasoru baglantisinda kilit sorunu cikarabilir: adlandirilmis birim.
+      - hub-data:/data
+    ports:
+      - "3310:8081"
+      - "3311:8080"
+    mem_limit: 256m
+    logging:
+      driver: json-file
+      options: { max-size: "10m", max-file: "3" }
+
+volumes:
+  hub-data:

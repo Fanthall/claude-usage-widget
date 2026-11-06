@@ -18,7 +18,6 @@ import {
   RETRY_START_MS,
   staleThresholdMs,
   type CliErrorKind,
-  type CollectorConfig,
   type UsageSnapshot,
   type UsageStatus
 } from '../../shared/types'
@@ -120,12 +119,20 @@ export interface CollectorDeps {
   appendSnapshot?: (dir: string, snapshot: UsageSnapshot) => Promise<unknown>
   now?: () => number
   timers?: CollectorTimers
+  /** 0-1 arasi rastgele sayi; kayma icin. Testte sabitlenir. */
+  random?: () => number
 }
 
-/** `CollectorConfig` ile uyumlu; `dataDir` disindaki alanlarin varsayilani var. */
+/** Toplayici ayari; `dataDir` disindaki alanlarin varsayilani var. */
 export interface CollectorInit {
   dataDir: string
   pollIntervalMs?: number
+  /**
+   * Her planli olcume eklenen rastgele kayma (±). Ayni hesabi iki cihaz
+   * soruyorsa istekler ayni ana yigilmaz; kota ucu sik soruluca 429 veriyor.
+   * Varsayilan 0.
+   */
+  jitterMs?: number
 }
 
 export interface Collector {
@@ -157,6 +164,8 @@ export function createCollector(deps: CollectorDeps, config: CollectorInit): Col
   const baseIntervalMs = config.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS
   const now = deps.now ?? Date.now
   const timers = deps.timers ?? createNodeTimers()
+  const random = deps.random ?? Math.random
+  const jitterMs = Math.max(0, config.jitterMs ?? 0)
   const read = deps.readUsage ?? (async (): Promise<UsageReadResult> => NO_SOURCE)
   const persist =
     deps.appendSnapshot ?? ((dir: string, snapshot: UsageSnapshot) => appendSnapshot(dir, snapshot))
@@ -237,12 +246,13 @@ export function createCollector(deps: CollectorDeps, config: CollectorInit): Col
   function schedule(): void {
     if (!running) return
     clearTimer()
-    nextAttemptAtMs = now() + intervalMs
+    const delay = Math.max(0, Math.round(intervalMs + (random() * 2 - 1) * jitterMs))
+    nextAttemptAtMs = now() + delay
     timer = timers.setTimeout(() => {
       timer = null
       nextAttemptAtMs = null
       void pollNow()
-    }, intervalMs)
+    }, delay)
   }
 
   /**
@@ -405,12 +415,4 @@ export function createCollector(deps: CollectorDeps, config: CollectorInit): Col
     },
     pollNow
   }
-}
-
-/** `CollectorConfig`ten toplayici kurar. */
-export function collectorFromConfig(deps: CollectorDeps, config: CollectorConfig): Collector {
-  return createCollector(deps, {
-    dataDir: config.dataDir,
-    pollIntervalMs: config.pollIntervalMs
-  })
 }

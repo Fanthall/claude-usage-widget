@@ -140,6 +140,66 @@ forward.
 
 ---
 
+## Two accounts, many devices
+
+The widget tracks a **personal** and a **team** Claude account side by side.
+Each account is a Claude Code config directory: personal is `~/.claude`, team is
+`~/.claude-team` by default (log in there with `CLAUDE_CONFIG_DIR=~/.claude-team claude`).
+Both paths can be changed in `config.json > accountDirs`.
+
+Besides quota, the widget counts **tokens** by reading Claude Code's transcripts
+(`<config dir>/projects/**/*.jsonl`, read-only) in a background process. Nothing
+extra is asked from the API, so counting costs no tokens.
+
+### The hub (optional)
+
+To see every device in one place, run the hub: a small Node server that merges
+token counts and quota samples from all devices and serves a detailed panel
+(stacked token chart with peaks, 5-hour quota line, hour × day heatmap, device,
+model and project breakdowns).
+
+```bash
+docker compose up -d --build   # hub: :3310 home port, :3311 public port
+```
+
+It has two listeners:
+
+| Port (container) | Published | Purpose |
+|---|---|---|
+| `8081` | `3310` | **Home network only.** Panel page, device enrollment, unauthenticated reads |
+| `8080` | `3311` | **The one to expose.** Every request needs a device key; no panel, no enrollment |
+
+How you expose `8080` is up to you: a tunnel, a reverse proxy with TLS, or a
+port forward. The app only needs an address. **Suggestion:** Tailscale Funnel
+works well here: no open ports on the router and a TLS address out of the box.
+Cloudflare Tunnel or any reverse proxy is fine too. Never expose `8081`.
+
+The hub can also count the server's own Claude usage: mount that machine's
+`~/.claude` read-only at `/claude` and `~/.claude.json` at `/claude.json` in a
+compose override.
+
+### Connecting a device
+
+In the widget's `config.json` (`%APPDATA%\claude-usage-widget\` on Windows,
+`~/Library/Application Support/claude-usage-widget/` on macOS):
+
+```json
+{
+  "hub": {
+    "url": "https://your-public-address",
+    "lanUrl": "http://192.168.x.y:3310"
+  }
+}
+```
+
+Restart the widget **once while on the home network**: it enrolls itself
+through `lanUrl` and stores its device key in the same file. After that it sends
+through `url` from anywhere, falling back to `lanUrl` at home. Without a hub the
+panel (tray menu or the chart button) shows this device's own data.
+
+Project folder names are **not sent** unless `"shareProjectPaths": true`; a work
+laptop's project names are work information too.
+
 ## Language
 
 The interface is English by default and switches to Turkish when the system
@@ -154,7 +214,12 @@ is a **compile error** rather than a string that silently falls back.
 - The access token is read from `~/.claude/.credentials.json` **only to sign the
   request**. It is never stored, logged, or returned.
 - Nothing is ever written under `~/.claude/` — that directory is read-only here.
-- No telemetry. The only outbound request is to Anthropic's own usage endpoint.
+  Transcripts are read for token counts only; message text is never stored.
+- No telemetry. Outbound requests go to Anthropic's own usage endpoint and, only
+  if you configure one, **your own hub**: per-minute token counts per model,
+  quota percentages, and project names only when `shareProjectPaths` is on.
+- The device key lives in `config.json`; the panel window never sees it (requests
+  go through the main process).
 - The local history file stores percentages and timestamps, nothing else.
 
 ## Platform status
@@ -170,10 +235,11 @@ Not overstating this table is deliberate.
 ## Development
 
 ```bash
-npm run dev         # run the widget in development mode
-npm test            # 558 tests
+npm run dev          # run the widget in development mode
+npm test             # widget, collector, panel and hub tests
 npm run typecheck
-npm run build
+npm run build        # app + panel (out/panel, also served by the hub)
+npm run build:panel  # panel only
 ```
 
 The renderer also runs in a plain browser: in development, when `window.usageApi`

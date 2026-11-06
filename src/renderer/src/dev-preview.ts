@@ -1,4 +1,35 @@
-import type { StatePayload, UsageSnapshot, UsageStatus } from '@shared/types'
+import type {
+  AccountKey,
+  AccountPayload,
+  AccountPresenceState,
+  StatePayload,
+  TokenState,
+  UsageSnapshot,
+  UsageStatus
+} from '@shared/types'
+
+/**
+ * Onizleme token durumu (`?tokens=`): `ok` (varsayilan), `scan` (ilk tarama
+ * suruyor), `error`, `off` (toplayici henuz cevap vermedi). Sayilar sahte.
+ */
+function tokenState(wanted: string): TokenState | null {
+  if (wanted === 'off') return null
+  if (wanted === 'error') return { accounts: [], progress: null, error: 'onizleme hatasi' }
+  const spark = (seed: number): number[] =>
+    Array.from({ length: 36 }, (_, i) => Math.round((Math.sin(i / 4 + seed) + 1.3) * 60_000 + i * 2_000))
+  return {
+    accounts: [
+      // Olculen oran (2026-11-06): 15 dakikada ~0,5 mn yeni token, ~50 mn onbellekten okuma.
+      { key: 'personal', last15m: 540_000, cacheRead15m: 49_600_000, today: 12_400_000, spark: spark(0) },
+      { key: 'team', last15m: 180_000, cacheRead15m: 14_000_000, today: 3_100_000, spark: spark(2) }
+    ],
+    progress:
+      wanted === 'scan'
+        ? { phase: 'initial', doneBytes: 3.1e9, totalBytes: 8.7e9, badLines: 0 }
+        : { phase: 'idle', doneBytes: 0, totalBytes: 0, badLines: 0 },
+    error: null
+  }
+}
 
 /**
  * Tarayicida (Electron olmadan) widget'i acabilmek icin sahte koprü.
@@ -69,28 +100,61 @@ const STATES: Record<string, UsageStatus> = {
   }
 }
 
+/**
+ * Team hesabinin onizleme durumu (`?team=`): `off` bagli degil (bugunku durum),
+ * `checking` yoklaniyor, digerleri `STATES` anahtarlari.
+ */
+function teamAccount(wanted: string): AccountPayload {
+  if (wanted === 'off' || wanted === 'checking') {
+    const presence: AccountPresenceState = wanted === 'off' ? 'not-connected' : 'checking'
+    return {
+      key: 'team',
+      presence,
+      status: wanted === 'off' ? { kind: 'no-data' } : { kind: 'loading' },
+      auth: null,
+      errorStreak: 0
+    }
+  }
+  const status: UsageStatus =
+    wanted === 'ok' ? { kind: 'ok', snapshot: snapshot(46, 40, 3) } : (STATES[wanted] ?? { kind: 'no-data' })
+  return { key: 'team', presence: 'connected', status, auth: null, errorStreak: 0 }
+}
+
 export function installDevPreview(): void {
   if (!import.meta.env.DEV) return
   if (window.usageApi !== undefined) return
 
-  const wanted = new URLSearchParams(window.location.search).get('state') ?? 'ok'
+  const params = new URLSearchParams(window.location.search)
+  const wanted = params.get('state') ?? 'ok'
   const status = STATES[wanted] ?? STATES['ok']
   if (status === undefined) return
-  const payload: StatePayload = {
-    status,
-    auth: null,
+  const teamWanted = params.get('team') ?? 'off'
+  const focus: AccountKey = params.get('focus') === 'team' ? 'team' : 'personal'
+  let payload: StatePayload = {
+    accounts: [
+      { key: 'personal', presence: 'connected', status, auth: null, errorStreak: 0 },
+      teamAccount(teamWanted)
+    ],
+    focus,
+    tokens: tokenState(params.get('tokens') ?? 'ok'),
     sessions: null,
-    errorStreak: 0,
     trayAvailable: true,
     // Onizlemede dil sorgudan secilebilir: ?lang=tr | ?lang=en
-    lang: new URLSearchParams(window.location.search).get('lang') === 'tr' ? 'tr' : 'en'
+    lang: params.get('lang') === 'tr' ? 'tr' : 'en'
   }
+  let listener: ((next: StatePayload) => void) | null = null
 
   window.usageApi = {
     // Gercek koprüde bu `process.platform`; onizlemede tarayici calisiyor.
     platform: 'linux',
     dragMode: 'manual',
     setTheme: () => Promise.resolve(),
+    // Gercek ana surec secimi saklayip yeni durumu yayinlar; onizleme de oyle yapar.
+    setAccount: (key) => {
+      payload = { ...payload, focus: key }
+      listener?.(payload)
+      return Promise.resolve()
+    },
     // Tarayicida pencere yok. Olcum yine de loglanir: gorunum basina istenen
     // boyutu Electron'u acmadan dogrulayabilmek icin.
     fitToContent: (width, height) => {
@@ -99,20 +163,26 @@ export function installDevPreview(): void {
       return Promise.resolve()
     },
     close: () => Promise.resolve(),
+    openPanel: () => Promise.resolve(),
     setTrayIcon: () => undefined,
     dragStart: () => undefined,
     dragMove: () => undefined,
     dragEnd: () => undefined,
     get: () => Promise.resolve(payload),
     refresh: () => Promise.resolve(payload),
-    onState: () => () => undefined
+    onState: (handler) => {
+      listener = handler
+      return () => {
+        listener = null
+      }
+    }
   }
 
   // Sahte veri sessizce gercek gibi gorunmemeli: kopru kuruldugunda ekranda
   // kalici bir isaret birakilir. Electron'da preload beklenmedik sekilde
   // dusseydi bu rozet hemen fark edilir.
   const rozet = document.createElement('div')
-  rozet.textContent = `ÖNİZLEME · ${wanted}`
+  rozet.textContent = `ÖNİZLEME · ${wanted} · team=${teamWanted}`
   rozet.setAttribute(
     'style',
     'position:fixed;left:0;bottom:0;z-index:9999;background:#e8a321;color:#18181b;' +

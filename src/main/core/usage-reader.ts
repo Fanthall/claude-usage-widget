@@ -43,6 +43,11 @@ export interface UsageReaderFs {
 export interface UsageReaderDeps {
   fs: UsageReaderFs
   env?: PathEnv
+  /**
+   * Okunacak hesabin dosyalari (`accountPaths`). Verilmezse varsayilan klasor:
+   * `~/.claude.json` ve `~/.claude/.credentials.json`.
+   */
+  files?: { accountFile: string; credentialsFile: string }
   /** Testte enjekte edilir; uretimde `fetchUtilization`. */
   fetchFn?: FetchDeps['fetchFn']
   /**
@@ -54,13 +59,10 @@ export interface UsageReaderDeps {
   now?: () => number
 }
 
-/** `~/.claude.json` okunamazsa onbellek yok sayilir; bu bir hata degil. */
-async function readCache(
-  deps: UsageReaderDeps,
-  env: PathEnv
-): Promise<CachedUtilization | null> {
+/** Hesap kaydi okunamazsa onbellek yok sayilir; bu bir hata degil. */
+async function readCache(deps: UsageReaderDeps, accountFile: string): Promise<CachedUtilization | null> {
   try {
-    return parseCachedUtilization(await deps.fs.readFile(claudeConfigFile(env)))
+    return parseCachedUtilization(await deps.fs.readFile(accountFile))
   } catch {
     return null
   }
@@ -73,9 +75,11 @@ async function readCache(
  */
 export function createUsageReader(deps: UsageReaderDeps): () => Promise<UsageReadResult> {
   const env = deps.env ?? nodePathEnv()
+  const accountFile = deps.files?.accountFile ?? claudeConfigFile(env)
+  const credentialsFile = deps.files?.credentialsFile ?? claudeCredentialsFile(env)
   const readToken =
     deps.readToken ??
-    (() => readAccessToken({ readFile: (f) => deps.fs.readFile(f) }, claudeCredentialsFile(env)))
+    (() => readAccessToken({ readFile: (f) => deps.fs.readFile(f) }, credentialsFile))
 
   const nudgeCli = deps.refreshToken ?? createCliRefresher()
 
@@ -102,7 +106,7 @@ export function createUsageReader(deps: UsageReaderDeps): () => Promise<UsageRea
     }
 
     const failure = toErrorKind(fresh.kind)
-    const cached = await readCache(deps, env)
+    const cached = await readCache(deps, accountFile)
     if (cached === null) {
       return { kind: 'none', failure, message: fresh.message }
     }

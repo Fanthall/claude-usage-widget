@@ -159,17 +159,6 @@ export function staleThresholdMs(pollIntervalMs: number): number {
 /** Ust uste bu kadar basarisizlikta kullaniciya gorunur uyari verilir (REQ-10 AC2). */
 export const ERROR_STREAK_FOR_ALERT = 3
 
-// ── Toplayici ────────────────────────────────────────────────────────────────
-
-export interface CollectorConfig {
-  /** Olcum araligi. Varsayilan 60 sn (Q5). */
-  pollIntervalMs: number
-  /** Tarihcenin yazilacagi dizin. */
-  dataDir: string
-  /** Kesfedilen calistirilabilir yolu; bilinmiyorsa null. */
-  claudeBinPath: string | null
-}
-
 /**
  * Varsayilan olcum araligi.
  *
@@ -204,17 +193,90 @@ export function gapThresholdMs(pollIntervalMs: number): number {
   return Math.max(HISTORY_GAP_MS, pollIntervalMs * 2.5)
 }
 
+// ── Hesaplar ─────────────────────────────────────────────────────────────────
+
+/**
+ * Izlenen hesaplar. Her biri ayri bir Claude Code ayar klasorudur: kisisel
+ * `~/.claude`, Team `~/.claude-team` (`CLAUDE_CONFIG_DIR` ile acilir). Kota ucu
+ * hesap basina jeton istedigi icin iki kotayi ayni anda gormenin tek yolu bu.
+ */
+export type AccountKey = 'personal' | 'team'
+
+export const ACCOUNT_KEYS: readonly AccountKey[] = ['personal', 'team']
+
+export function isAccountKey(value: unknown): value is AccountKey {
+  return typeof value === 'string' && (ACCOUNT_KEYS as readonly string[]).includes(value)
+}
+
+/**
+ * Hesabin bu cihazdaki durumu.
+ *
+ * - `checking`: acilista henuz yoklanmadi. "Bagli degil" diye gosterilmez;
+ *   kisisel hesap her acilista bir an yanlis uyari verirdi.
+ * - `not-connected`: bu cihazda o hesaba giris yapilmamis (klasor ya da hesap
+ *   kaydi yok). HATA degildir; Team henuz acilmamis olabilir. Olcum yapilmaz,
+ *   sayi gosterilmez.
+ */
+export type AccountPresenceState = 'checking' | 'connected' | 'not-connected'
+
+/** Bir hesabin gostergeye giden durumu. */
+export interface AccountPayload {
+  key: AccountKey
+  presence: AccountPresenceState
+  status: UsageStatus
+  auth: AuthStatus | null
+  /** Ust uste basarisizlik sayisi; ERROR_STREAK_FOR_ALERT'i asinca uyari. */
+  errorStreak: number
+}
+
+// ── Token (kayitlardan) ──────────────────────────────────────────────────────
+
+/** Bir hesabin token ozeti. Toplam = giris + cikti + onbellege yazma + onbellekten okuma. */
+export interface AccountTokens {
+  key: AccountKey
+  /**
+   * Son 15 dakika: giris + cikti + onbellege yazma. Onbellekten okuma HARIC
+   * (istek basina tum baglam yeniden okunur; dahil edilince sayi ~100 kat sisiyor).
+   */
+  last15m: number
+  /** Son 15 dakikada onbellekten okunan; ayri ve kucuk gosterilir. */
+  cacheRead15m: number
+  /** Bugun (yerel gece yarisindan beri), onbellek okumasi haric. */
+  today: number
+  /** Son 3 saat, 5 dakikalik dilimler, eskiden yeniye (36 deger). */
+  spark: number[]
+}
+
+/** Gecmis taramasinin ilerlemesi. */
+export interface TokenScanProgress {
+  /** `initial`: ilk tarama suruyor; `idle`: yalniz yeni satirlar izleniyor. */
+  phase: 'initial' | 'idle'
+  doneBytes: number
+  totalBytes: number
+  /** Okunamayan satirlarin toplami; kayit bicimi degistiyse buyur. */
+  badLines: number
+}
+
+export interface TokenState {
+  accounts: AccountTokens[]
+  progress: TokenScanProgress | null
+  /** Toplayici calisamiyorsa nedeni; sayilar gosterilmez. */
+  error: string | null
+}
+
 // ── Pencere / IPC ────────────────────────────────────────────────────────────
 
 export type WindowRole = 'widget' | 'panel'
 
 /** Renderer'a giden yayin. Tek kanal, tek tip. */
 export interface StatePayload {
-  status: UsageStatus
-  auth: AuthStatus | null
+  /** `ACCOUNT_KEYS` sirasiyla, her hesap bir kez. */
+  accounts: AccountPayload[]
+  /** Buyuk sayida ve tepside gosterilen hesap. Kullanici widget'tan secer. */
+  focus: AccountKey
+  /** Kayitlardan sayilan token; toplayici henuz cevap vermediyse null. */
+  tokens: TokenState | null
   sessions: ProcessScanResult | null
-  /** Ust uste basarisizlik sayisi; ERROR_STREAK_FOR_ALERT'i asinca uyari. */
-  errorStreak: number
   /**
    * Sistem cubugu ikonu kurulabildi mi. Bazi Linux masaustlerinde tray yok;
    * o zaman widget'i gizlemek onu erisilemez yapar — kapatma dugmesi bunu
